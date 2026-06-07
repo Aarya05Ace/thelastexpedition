@@ -1,0 +1,16 @@
+{
+  "dependencies": {
+    "com.clockworklabs.spacetimedbsdk": "https://github.com/clockworklabs/com.clockworklabs.spacetimedbsdk.git?path=/",
+    "com.unity.render-pipelines.high-definition": "17.0.3",
+    "com.unity.inputsystem": "1.11.2",
+    "com.unity.cinemachine": "3.1.2",
+    "com.unity.textmeshpro": "3.0.7",
+    "com.unity.ugui": "2.0.0",
+    "com.unity.modules.audio": "1.0.0",
+    "com.unity.modules.animation": "1.0.0",
+    "com.unity.modules.physics": "1.0.0",
+    "com.unity.modules.uielements": "1.0.0",
+    "com.unity.modules.imgui": "1.0.0",
+    "com.unity.modules.jsonserialize": "1.0.0"
+  }
+}

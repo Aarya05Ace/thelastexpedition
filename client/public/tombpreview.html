@@ -1,0 +1,44 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf8" />
+<style>body { margin: 0; background: #20242c; }</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.175.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.175.0/examples/jsm/"
+}}
+</script>
+</head>
+<body>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+const W = 1600, H = 520;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x20242c);
+const cam = new THREE.PerspectiveCamera(45, W / H, 0.1, 500);
+cam.position.set(0, 9, 70); cam.lookAt(0, 5, 0);
+const rend = new THREE.WebGLRenderer({ antialias: true });
+rend.setSize(W, H); document.body.appendChild(rend.domElement);
+scene.add(new THREE.AmbientLight(0xffffff, 1.1));
+const d = new THREE.DirectionalLight(0xffffff, 2.0); d.position.set(8, 14, 10); scene.add(d);
+scene.add(new THREE.GridHelper(120, 60, 0x668866, 0x335533));
+const models = ['Column_Art','Obelisk_Art','TempleArch01_Art','TempleArch02_Art','Wall01_Art','GodAnubis_Art','GodBastet_Art','GodRa_Art','PalmTree_Art','FireTorch01_Art','Spiderweb_Art','Jar01_Art','Podium_Art'];
+const loader = new GLTFLoader();
+let x = -60, loaded = 0;
+for (const m of models) {
+  loader.load(`/models/tomb/${m}.glb`, (g) => {
+    const o = g.scene;
+    const box = new THREE.Box3().setFromObject(o); const size = new THREE.Vector3(); box.getSize(size);
+    const cx = (box.min.x + box.max.x) / 2, cz = (box.min.z + box.max.z) / 2;
+    o.position.set(x - cx, -box.min.y, -cz);
+    scene.add(o);
+    console.log(`MODEL ${m} sizeXYZ ${size.x.toFixed(2)} ${size.y.toFixed(2)} ${size.z.toFixed(2)}`);
+    x += 10; loaded++; if (loaded === models.length) window.__ready = true;
+  }, undefined, (e) => { console.log('ERR ' + m + ' ' + (e.message||e)); loaded++; if (loaded === models.length) window.__ready = true; });
+}
+function tick() { rend.render(scene, cam); requestAnimationFrame(tick); } tick();
+</script>
+</body>
+</html>

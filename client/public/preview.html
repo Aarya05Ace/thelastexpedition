@@ -1,0 +1,52 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf8" />
+<style>body { margin: 0; background: #2b2f38; }</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.175.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.175.0/examples/jsm/"
+}}
+</script>
+</head>
+<body>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+const W = 1400, H = 460;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x2b2f38);
+const cam = new THREE.PerspectiveCamera(50, W / H, 0.1, 300);
+cam.position.set(0, 5, 26);
+cam.lookAt(0, 3, 0);
+const rend = new THREE.WebGLRenderer({ antialias: true });
+rend.setSize(W, H);
+document.body.appendChild(rend.domElement);
+scene.add(new THREE.AmbientLight(0xffffff, 1.0));
+const d = new THREE.DirectionalLight(0xffffff, 2.2); d.position.set(6, 12, 8); scene.add(d);
+// grid for scale (1 unit cells)
+scene.add(new THREE.GridHelper(60, 60, 0x668866, 0x335533));
+
+const models = ['dead_tree_trunk', 'dead_tree_trunk_02', 'dead_quiver_trunk', 'boulder_01', 'marble_bust_01', 'fern_02'];
+const loader = new GLTFLoader();
+let x = -25, loaded = 0;
+for (const m of models) {
+  loader.load(`/models/env/${m}/${m}.gltf`, (g) => {
+    const o = g.scene;
+    const box = new THREE.Box3().setFromObject(o);
+    const size = new THREE.Vector3(); box.getSize(size);
+    const cx = (box.min.x + box.max.x) / 2, cz = (box.min.z + box.max.z) / 2;
+    o.position.set(x - cx, -box.min.y, -cz);
+    scene.add(o);
+    console.log(`MODEL ${m} sizeXYZ ${size.x.toFixed(2)} ${size.y.toFixed(2)} ${size.z.toFixed(2)}`);
+    x += 10; loaded++;
+    if (loaded === models.length) window.__ready = true;
+  }, undefined, (e) => { console.log('ERR ' + m + ' ' + e.message); loaded++; if (loaded === models.length) window.__ready = true; });
+}
+function tick() { rend.render(scene, cam); requestAnimationFrame(tick); }
+tick();
+</script>
+</body>
+</html>
