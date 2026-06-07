@@ -69,8 +69,13 @@ public class ExpeditionCamera : MonoBehaviour
     public Vector3 PlanarRight   => Quaternion.Euler(0f, yaw, 0f) * Vector3.right;
     public float Yaw => yaw;
 
+    [Header("Recoil")]
+    public float recoilMaxDeg = 4f;        // cap on accumulated upward kick so sustained fire can't flip the view
+    public float recoilRecoverPerSec = 8f; // deg/s the view settles back down after a kick
+
     Camera cam;
     float yaw, pitch;
+    float recoilPitch;      // transient upward pitch from weapon recoil; eases back to 0 each frame
     float mouseIdleTimer;   // seconds since the mouse last moved
     float curFov, curDist;
     Vector3 smoothPivot;
@@ -108,10 +113,10 @@ public class ExpeditionCamera : MonoBehaviour
 
             if (mouseMoved)
             {
-                // Active mouse-look ALWAYS wins. Non-inverted by default: mouse RIGHT -> look right, mouse UP
-                // -> look up. invertX/invertY flip per preference.
+                // Active mouse-look ALWAYS wins. Non-inverted: mouse RIGHT -> look right, mouse UP -> look UP
+                // (mouse up RAISES pitch, which tilts the view up in this rig). invertX/invertY flip per preference.
                 yaw   += (invertX ? -mx : mx) * mouseSensitivity;
-                pitch += (invertY ?  my : -my) * mouseSensitivity;
+                pitch += (invertY ? -my :  my) * mouseSensitivity;
                 pitch  = Mathf.Clamp(pitch, pitchMin, pitchMax);
                 mouseIdleTimer = 0f;
             }
@@ -142,10 +147,16 @@ public class ExpeditionCamera : MonoBehaviour
         curDist = Mathf.Lerp(curDist, wantDist, sk);
         cam.fieldOfView = curFov;
 
-        // Smooth the pivot follow + rotation (the slight Fortnite lag).
+        // Recoil settles back to 0 over time (the view climbs on each shot, then recovers between shots).
+        if (recoilPitch > 0f)
+            recoilPitch = Mathf.Max(0f, recoilPitch - recoilRecoverPerSec * Time.deltaTime);
+
+        // Smooth the pivot follow + rotation (the slight Fortnite lag). Recoil ADDS to pitch (higher pitch =
+        // look UP in this rig now, matching the mouse "pitch += my" convention) so the view climbs up per shot.
+        float renderPitch = Mathf.Clamp(pitch + recoilPitch, pitchMin, pitchMax);
         Vector3 pivot = target.position + Vector3.up * pivotHeight;
         smoothPivot = Vector3.Lerp(smoothPivot, pivot, Step(positionLag));
-        curRot = Quaternion.Slerp(curRot, Quaternion.Euler(pitch, yaw, 0f), Step(rotationLag));
+        curRot = Quaternion.Slerp(curRot, Quaternion.Euler(renderPitch, yaw, 0f), Step(rotationLag));
 
         // Ideal (unobstructed) arm from the pivot to the shoulder-offset camera spot.
         Vector3 idealPos = smoothPivot + curRot * new Vector3(shoulder.x, shoulder.y, -curDist);
@@ -163,6 +174,14 @@ public class ExpeditionCamera : MonoBehaviour
         else armLen = Mathf.Lerp(armLen, allowedLen, Step(extendTime));
 
         transform.SetPositionAndRotation(smoothPivot + armDir * armLen, curRot);
+    }
+
+    // Add an upward recoil kick (deg), accumulated up to recoilMaxDeg. LocalPlayer routes PlayerCombat.OnRecoil
+    // here on each discharged shot; the kick eases back to 0 in LateUpdate so aim recovers between shots.
+    public void AddRecoilPitch(float deg)
+    {
+        if (deg <= 0f) return;
+        recoilPitch = Mathf.Min(recoilMaxDeg, recoilPitch + deg);
     }
 
     // Exponential approach factor for a given time-constant (seconds). Smaller tau = snappier.

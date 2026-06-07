@@ -27,21 +27,25 @@ using Vector3 = UnityEngine.Vector3;
 
 public class ClueLogHud : MonoBehaviour
 {
-    // Panel geometry (left-anchored sheet, RDR2 journal feel).
+    // Panel geometry (RIGHT-anchored sheet, RDR2 journal feel — opposite the top-left objective tracker so
+    // the two never share an edge / overlap when open).
     const float PanelW   = 560f;
     const float PanelH   = 720f;
     const float HeaderH  = 64f;
     const float CardGap  = 10f;
     const float CardPadX = 16f;
     const float Pad      = 20f;
-    const float SlideX   = 40f;     // px the panel slides in from the left on open
+    const float EdgeX    = 40f;     // resting inset from the RIGHT edge (anchoredPosition.x = -EdgeX)
+    const float SlideX   = 40f;     // px the panel slides in FROM the right on open
     const float AnimDur  = 0.18f;   // open/close fade + slide time
 
     Canvas canvas;
     CanvasGroup group;
     RectTransform panel;
+    RectTransform scrim;       // dims the rest of the screen while open (focused journal moment)
     RectTransform content;     // where cards stack
     Text emptyState;
+    Text headerSub;            // "N gathered" dim sub line under the INTEL header
 
     readonly HashSet<ulong> _seen = new();   // de-dupe clue_reveal rows by Id
     float _nextCardY;                          // running stack cursor (cards grow downward)
@@ -100,25 +104,36 @@ public class ClueLogHud : MonoBehaviour
 
         var root = (RectTransform)transform;
 
-        // ---- Left-anchored sheet ----
+        // ---- Full-screen dimming scrim BEHIND the panel (focused journal moment). Built first so it
+        //      renders under the sheet. Its alpha tracks the open animation. Never eats clicks itself. ----
+        var scrimImg = LobbyUI.Panel(root, "Scrim", new Color(0f, 0f, 0f, 0.35f));
+        scrim = scrimImg;
+        scrim.anchorMin = Vector2.zero; scrim.anchorMax = Vector2.one;
+        scrim.offsetMin = Vector2.zero; scrim.offsetMax = Vector2.zero;
+        scrimImg.GetComponent<Image>().raycastTarget = false;
+
+        // ---- RIGHT-anchored sheet ----
         var sheet = LobbyUI.RoundedPanel(root, "CluePanel", LobbyUI.BgDeep, 16);
         panel = sheet.rectTransform;
-        LobbyUI.Place(panel, new Vector2(0f, 0.5f), new Vector2(0f, 0.5f), new Vector2(0f, 0.5f),
-                      new Vector2(40f, 0f), new Vector2(PanelW, PanelH));
+        LobbyUI.Place(panel, new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(1f, 0.5f),
+                      new Vector2(-EdgeX, 0f), new Vector2(PanelW, PanelH));
         LobbyUI.Border(panel, LobbyUI.EmberDim, 1f);
 
-        // ---- Header ----
+        // ---- Header ("INTEL" in condensed title weight) ----
         var header = LobbyUI.ShadowLabel(panel, LobbyUI.Spaced("INTEL"), LobbyUI.HeaderSize,
                                          LobbyUI.EmberSoft, TextAnchor.MiddleLeft);
+        StorySequencer.Apply(header, StorySequencer.Weight.CondensedSemiBold);
         var hrt = header.rectTransform;
         hrt.anchorMin = new Vector2(0f, 1f); hrt.anchorMax = new Vector2(1f, 1f);
         hrt.pivot = new Vector2(0f, 1f);
         hrt.anchoredPosition = new Vector2(Pad, -Pad);
         hrt.sizeDelta = new Vector2(-Pad * 2f, 30f);
 
-        var sub = LobbyUI.ShadowLabel(panel, "what the island let slip", LobbyUI.HintSize,
-                                      LobbyUI.AshDim, TextAnchor.MiddleLeft);
-        var srt = sub.rectTransform;
+        // Dim sub line: the gathered count (moved here from the objective tracker). Starts at none.
+        headerSub = LobbyUI.ShadowLabel(panel, "nothing gathered yet", LobbyUI.HintSize,
+                                        LobbyUI.AshDim, TextAnchor.MiddleLeft);
+        StorySequencer.Apply(headerSub, StorySequencer.Weight.Regular);
+        var srt = headerSub.rectTransform;
         srt.anchorMin = new Vector2(0f, 1f); srt.anchorMax = new Vector2(1f, 1f);
         srt.pivot = new Vector2(0f, 1f);
         srt.anchoredPosition = new Vector2(Pad, -Pad - 28f);
@@ -143,6 +158,7 @@ public class ClueLogHud : MonoBehaviour
         // ---- Empty state ----
         emptyState = LobbyUI.ShadowLabel(content, "No intel yet. Talk to the islanders.",
                                          LobbyUI.BodySize, LobbyUI.AshDim, TextAnchor.UpperLeft);
+        StorySequencer.Apply(emptyState, StorySequencer.Weight.Regular);
         emptyState.horizontalOverflow = HorizontalWrapMode.Wrap;
         var ert = emptyState.rectTransform;
         ert.anchorMin = new Vector2(0f, 1f); ert.anchorMax = new Vector2(1f, 1f);
@@ -211,6 +227,7 @@ public class ClueLogHud : MonoBehaviour
         if (hasWho)
         {
             var chip = LobbyUI.ShadowLabel(crt, who, LobbyUI.HintSize, LobbyUI.Ember, TextAnchor.UpperLeft);
+            StorySequencer.Apply(chip, StorySequencer.Weight.SemiBold);
             var chrt = chip.rectTransform;
             chrt.anchorMin = new Vector2(0f, 1f); chrt.anchorMax = new Vector2(1f, 1f);
             chrt.pivot = new Vector2(0f, 1f);
@@ -221,6 +238,7 @@ public class ClueLogHud : MonoBehaviour
 
         // The earned fact, verbatim.
         var factLbl = LobbyUI.ShadowLabel(crt, fact, LobbyUI.BodySize, LobbyUI.AshText, TextAnchor.UpperLeft);
+        StorySequencer.Apply(factLbl, StorySequencer.Weight.Regular);
         factLbl.horizontalOverflow = HorizontalWrapMode.Wrap;
         factLbl.verticalOverflow = VerticalWrapMode.Truncate;
         var frt = factLbl.rectTransform;
@@ -231,6 +249,16 @@ public class ClueLogHud : MonoBehaviour
 
         _nextCardY += cardH + CardGap;
         _cardCount++;
+        RefreshCount();
+    }
+
+    // The dim "N gathered" sub line under the INTEL header (moved here from the objective tracker).
+    void RefreshCount()
+    {
+        if (headerSub == null) return;
+        headerSub.text = _cardCount <= 0
+            ? "nothing gathered yet"
+            : (_cardCount == 1 ? "1 piece gathered" : _cardCount + " pieces gathered");
     }
 
     // Best-effort "who said this": clue_reveal -> party_clue (by clue code via clue table) -> npc name.
@@ -288,8 +316,13 @@ public class ClueLogHud : MonoBehaviour
 
     void Update()
     {
-        if (Input.GetKeyDown(KeyCode.Tab))
+        // GATED: ignore Tab until the cold open has cleared (no journal during the cinematic intro). If the
+        // intro is already done this is a no-op guard, so normal play is unaffected.
+        if (Input.GetKeyDown(KeyCode.Tab) && StorySequencer.IntroComplete)
             _open = !_open;
+
+        // If the player is somehow still open across a gate close, force it shut.
+        if (_open && !StorySequencer.IntroComplete) _open = false;
 
         float target = _open ? 1f : 0f;
         _anim = Mathf.MoveTowards(_anim, target, Time.deltaTime / Mathf.Max(0.01f, AnimDur));
@@ -306,10 +339,17 @@ public class ClueLogHud : MonoBehaviour
             }
         }
 
+        // Dim the rest of the screen as the panel opens (focused journal read).
+        if (scrim != null)
+        {
+            var img = scrim.GetComponent<Image>();
+            if (img != null) img.color = new Color(0f, 0f, 0f, 0.35f * e);
+        }
+
         if (panel != null)
         {
-            // Slide in from the left as it fades.
-            float x = 40f - (1f - e) * SlideX;
+            // Slide IN from the right edge as it fades (panel is right-anchored, resting at x = -EdgeX).
+            float x = -EdgeX + (1f - e) * SlideX;
             var p = panel.anchoredPosition;
             if (!Mathf.Approximately(p.x, x))
                 panel.anchoredPosition = new Vector2(x, p.y);

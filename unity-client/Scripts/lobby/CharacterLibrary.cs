@@ -24,7 +24,7 @@ public class CharacterLibrary
     [Tooltip("Map ModelKey -> prefab. Fill the 4 survivalists in catalog CharacterId order 0..3.")]
     public ModelEntry[] characters = Array.Empty<ModelEntry>();
 
-    [Tooltip("genSuit.fbx — the Patron / Suit display mesh.")]
+    [Tooltip("genSuit.fbx, the Patron / Suit display mesh.")]
     public GameObject suitPrefab;
 
     // Linear scan (5 entries, trivial). The Inspector-wired list wins; if it's empty/unmapped (e.g. a

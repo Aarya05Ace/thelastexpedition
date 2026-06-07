@@ -1,17 +1,17 @@
-// LobbyUI.cs — THE LOST EXPEDITION lobby: code-driven uGUI factory helpers (PART D skin).
+// LobbyUI.cs - THE LOST EXPEDITION lobby: code-driven uGUI factory helpers (PART D skin).
 //
 // Shared so the auth panel, carousel, HUD, and Patron bubble all build consistent legacy-uGUI
 // widgets (Text / Button / InputField / Image) in code. Uses the built-in legacy uGUI (com.unity.ugui
-// 2.0.0) — NO TMP asset wiring (TMP renders BLANK with no TMP Essentials imported). Faux-TMP polish is
+// 2.0.0) - NO TMP asset wiring (TMP renders BLANK with no TMP Essentials imported). Faux-TMP polish is
 // achieved via UnityEngine.UI.Shadow + Bold + a thin-space letter-spacing helper.
 //
-// PART D ADDITIONS (additive — every existing Panel/Label/Button/Input/Place/WorldLabel/DefaultFont
+// PART D ADDITIONS (additive - every existing Panel/Label/Button/Input/Place/WorldLabel/DefaultFont
 // surface is preserved so all callers still compile):
 //   * an ember/ash color token palette + a type-scale const block,
-//   * RoundedSprite(radius) — a CACHED code-gen 9-slice rounded-rect Texture2D->Sprite (generate ONCE
+//   * RoundedSprite(radius) - a CACHED code-gen 9-slice rounded-rect Texture2D->Sprite (generate ONCE
 //     per radius, never per-panel, or it GC-thrashes), plus RoundedPanel / RoundedButton wrappers,
 //   * Border / ShadowLabel / Vignette helpers,
-//   * Spaced() — thin-space letter-spacing for the faux-TMP titles.
+//   * Spaced() - thin-space letter-spacing for the faux-TMP titles.
 
 using System.Collections.Generic;
 using UnityEngine;
@@ -19,19 +19,26 @@ using UnityEngine.UI;
 
 public static class LobbyUI
 {
-    // ---- color tokens (amber/ember horror palette — NOT Fortnite blue/yellow) ----
-    public static readonly Color BgDeep      = new Color(0.035f, 0.030f, 0.028f, 0.96f); // near-black warm
-    public static readonly Color BgPanel     = new Color(0.075f, 0.062f, 0.052f, 0.92f); // dark panel
-    public static readonly Color BgRaised    = new Color(0.115f, 0.095f, 0.078f, 0.95f); // raised chip
-    public static readonly Color Ember       = new Color(1.00f, 0.55f, 0.18f, 1f);       // bright ember
-    public static readonly Color EmberDim    = new Color(0.62f, 0.32f, 0.12f, 1f);       // hairline / borders
-    public static readonly Color EmberSoft   = new Color(1.00f, 0.78f, 0.46f, 1f);       // soft title glow
-    public static readonly Color AshText     = new Color(0.90f, 0.86f, 0.80f, 1f);       // primary text
-    public static readonly Color AshDim      = new Color(0.62f, 0.58f, 0.53f, 1f);       // secondary text
-    public static readonly Color ReadyGreen  = new Color(0.42f, 0.78f, 0.40f, 1f);       // READY pill
-    public static readonly Color NotReadyGrey= new Color(0.50f, 0.48f, 0.46f, 1f);       // NOT READY pill
-    public static readonly Color Crimson     = new Color(0.92f, 0.34f, 0.30f, 1f);       // error / fail
-    public static readonly Color PatronGold  = new Color(0.96f, 0.82f, 0.50f, 1f);       // the Patron voice
+    // ---- color tokens (AAA restyle: restrained amber on a desaturated near-black charcoal - NOT a hot
+    //      game-jam orange). Token NAMES are unchanged (every panel references them); only the VALUES are
+    //      retuned per the AAA spec (LotU/RDR2 warm-single-accent-on-charcoal). The amber accent appears on
+    //      AT MOST two things per screen; everything else is AshText/AshDim on near-black. ----
+    public static readonly Color BgDeep      = ToColor(0x0B, 0x0A, 0x09, 0.97f); // #0B0A09 near-black warm scrim
+    public static readonly Color BgPanel     = ToColor(0x16, 0x13, 0x0F, 0.90f); // #16130F panel / field fill
+    public static readonly Color BgRaised    = ToColor(0x21, 0x1C, 0x16, 0.95f); // #211C16 raised row / chip
+    public static readonly Color Ember       = ToColor(0xE0, 0xA0, 0x42, 1f);    // #E0A042 THE restrained amber accent
+    public static readonly Color EmberDim    = ToColor(0x5E, 0x4A, 0x2E, 1f);    // #5E4A2E hairline rules / idle borders
+    public static readonly Color EmberSoft   = ToColor(0xF0, 0xCF, 0x9A, 1f);    // #F0CF9A soft title glow / hover text
+    public static readonly Color AshText     = ToColor(0xE8, 0xE2, 0xD6, 1f);    // #E8E2D6 primary text (warm off-white)
+    public static readonly Color AshDim      = ToColor(0x8C, 0x85, 0x7A, 1f);    // #8C857A secondary text / placeholders
+    public static readonly Color ReadyGreen  = ToColor(0x6F, 0xA4, 0x63, 1f);    // #6FA463 dusty READY pill
+    public static readonly Color NotReadyGrey= ToColor(0x50, 0x4B, 0x46, 1f);    // NOT READY pill
+    public static readonly Color Crimson     = ToColor(0xC7, 0x42, 0x3A, 1f);    // #C7423A error / fail only
+    public static readonly Color PatronGold  = ToColor(0xD8, 0xB3, 0x6A, 1f);    // #D8B36A the Curator voice (dustier)
+
+    // sRGB byte -> linear-aware Unity Color (Unity's Color ctor expects 0..1; we just normalize).
+    static Color ToColor(int r, int g, int b, float a) =>
+        new Color(r / 255f, g / 255f, b / 255f, a);
 
     // ---- type scale ----
     public const int TitleSize  = 44;
@@ -65,6 +72,59 @@ public static class LobbyUI
             if (i < s.Length - 1) sb.Append(' ');
         }
         return sb.ToString();
+    }
+
+    // ADDITIVE (AAA spec 3a): tighter letter-spacing for the large wordmark + UPPER micro-labels.
+    // Inserts a THIN space (U+2009) between glyphs instead of a full space, so "THE LAST EXPEDITION"
+    // reads as a letter-spaced wordmark, not "T H E   L A S T". A real space is preserved verbatim (no
+    // extra inter-word widening). Existing Spaced() is untouched for current callers.
+    public static string SpacedThin(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return s;
+        const char thin = '\u2009'; // THIN SPACE
+        const char space = ' ';
+        var sb = new System.Text.StringBuilder(s.Length * 2);
+        for (int i = 0; i < s.Length; i++)
+        {
+            char c = s[i];
+            sb.Append(c);
+            if (i < s.Length - 1 && c != space && s[i + 1] != space) sb.Append(thin);
+        }
+        return sb.ToString();
+    }
+
+    // ADDITIVE (AAA spec 3): a Barlow-skinned label. Builds a plain Label, then routes it through
+    // StorySequencer.Apply(weight) so the menu reads in Barlow (Condensed / Bold / Medium / Regular...)
+    // and drops the faux-bold the legacy factory would otherwise add. Null-safe: if the sequencer is
+    // briefly absent the label keeps the LegacyRuntime fallback rather than rendering blank.
+    public static Text BarlowLabel(Transform parent, string text, int size, Color color,
+                                   StorySequencer.Weight weight,
+                                   TextAnchor anchor = TextAnchor.MiddleLeft)
+    {
+        var t = Label(parent, text, size, color, anchor);
+        StorySequencer.Apply(t, weight);
+        return t;
+    }
+
+    // ADDITIVE: re-skin an already-built Text (e.g. a button/input child) into a Barlow weight.
+    public static void ApplyBarlow(Text t, StorySequencer.Weight weight)
+    {
+        if (t == null) return;
+        StorySequencer.Apply(t, weight);
+    }
+
+    // ADDITIVE: a thin horizontal accent rule (1px high by default). Used under the wordmark. Pure
+    // tinted Image, no raycast, no rounding (a hairline reads cleaner square).
+    public static Image Rule(Transform parent, Color color, float width, float thickness = 1f)
+    {
+        var go = new GameObject("Rule", typeof(RectTransform));
+        go.transform.SetParent(parent, false);
+        var img = go.AddComponent<Image>();
+        img.color = color;
+        img.raycastTarget = false;
+        var rt = go.GetComponent<RectTransform>();
+        rt.sizeDelta = new Vector2(width, thickness);
+        return img;
     }
 
     // ===== legacy plain widgets (UNCHANGED surface) =====
@@ -239,7 +299,7 @@ public static class LobbyUI
         img.type = Image.Type.Sliced;
         img.color = color;
         img.raycastTarget = false;
-        // Hollow look: tint only — paired with a slightly smaller filled panel behind it. To keep this
+        // Hollow look: tint only - paired with a slightly smaller filled panel behind it. To keep this
         // cheap and dependency-free we render it as a thin tinted frame by disabling fill via alpha edge.
         var ol = go.AddComponent<Outline>();
         ol.effectColor = color;

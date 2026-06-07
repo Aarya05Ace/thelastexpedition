@@ -1,0 +1,4 @@
+ws://172.18.121.114:3000
+# THE LAST EXPEDITION - shared server address baked into the build.
+# Every downloaded copy auto-connects here, so judges just open the app and join.
+# This is the host machine's LAN IP. If the host IP changes, update this line and rebuild.

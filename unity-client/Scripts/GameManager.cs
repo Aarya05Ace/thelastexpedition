@@ -6,6 +6,7 @@
 // (e.g. GameManager.Conn.Db.Npc.OnInsert += ...).
 
 using System;
+using System.IO;
 using UnityEngine;
 using SpacetimeDB;
 using SpacetimeDB.Types;
@@ -55,6 +56,58 @@ public class GameManager : MonoBehaviour
 
     const string TOKEN_KEY = "expedition_auth_token";
 
+    // Per-machine server override file. Each player can edit this AFTER install (no rebuild) to
+    // point at the LAN host, e.g. a single line: ws://192.168.1.50:3000 . Looked up first under
+    // Application.persistentDataPath (user-editable, survives reinstall of the same build), then
+    // as a shippable default under StreamingAssets. Blank lines and lines starting with # or //
+    // are ignored, so the file can carry a comment explaining the format. If nothing usable is
+    // found the serialized/code-default serverUri is kept. The module name is never read here.
+    const string SERVER_CONFIG_FILE = "server.txt";
+
+    // Returns the first non-blank, non-comment line from the override file, trimmed, or null.
+    static string ResolveServerUriFromFile()
+    {
+        var persistentPath = Path.Combine(Application.persistentDataPath, SERVER_CONFIG_FILE);
+        var uri = ReadFirstUriLine(persistentPath);
+        if (!string.IsNullOrEmpty(uri))
+        {
+            Debug.Log($"[STDB] server override from persistentDataPath: {uri} ({persistentPath})");
+            return uri;
+        }
+
+        var streamingPath = Path.Combine(Application.streamingAssetsPath, SERVER_CONFIG_FILE);
+        uri = ReadFirstUriLine(streamingPath);
+        if (!string.IsNullOrEmpty(uri))
+        {
+            Debug.Log($"[STDB] server override from StreamingAssets: {uri} ({streamingPath})");
+            return uri;
+        }
+
+        return null;
+    }
+
+    // Reads a config file and returns the first usable line (trimmed), ignoring blanks and
+    // comments (# or //). Returns null on missing file or any read error so callers fall back.
+    static string ReadFirstUriLine(string path)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return null;
+            foreach (var raw in File.ReadAllLines(path))
+            {
+                var line = raw.Trim();
+                if (line.Length == 0) continue;
+                if (line.StartsWith("#") || line.StartsWith("//")) continue;
+                return line;
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[STDB] could not read server config {path}: {e.Message}");
+        }
+        return null;
+    }
+
     void Awake()
     {
         if (Instance != null) { Destroy(gameObject); return; }
@@ -64,6 +117,12 @@ public class GameManager : MonoBehaviour
 
     void Start()
     {
+        // Per-machine override: lets two machines join one server without rebuilding. Falls back
+        // to the serialized/code-default serverUri when no config file or no usable line exists.
+        var resolvedUri = ResolveServerUriFromFile();
+        if (!string.IsNullOrEmpty(resolvedUri)) serverUri = resolvedUri;
+        Debug.Log($"[STDB] connecting to {serverUri} (module {moduleName})");
+
         var builder = DbConnection.Builder()
             .WithUri(serverUri)
             .WithDatabaseName(moduleName)
@@ -106,7 +165,7 @@ public class GameManager : MonoBehaviour
 
     void OnSubscriptionApplied(SubscriptionEventContext ctx)
     {
-        Debug.Log("[STDB] subscription applied — joining the expedition");
+        Debug.Log("[STDB] subscription applied, joining the expedition");
         Ready = true;
         if (AutoRegisterPlayer) Conn.Reducers.RegisterPlayer(username, characterClass);
         _onReady?.Invoke();

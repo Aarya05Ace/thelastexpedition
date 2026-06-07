@@ -85,45 +85,87 @@ public static class CharacterRig
 
     static void WireAnimator(GameObject model)
     {
+        if (model == null) return;
+
         var animator = model.GetComponent<Animator>();
         if (animator == null) animator = model.AddComponent<Animator>();
         animator.applyRootMotion = false;
 
-        // A HUMANOID avatar is required for the retargeted clips to bind to the bones — without it the
-        // model just T-poses. Find/assign one robustly.
-        if (animator.avatar == null || !animator.avatar.isHuman)
-        {
-            // 1) Reuse any humanoid avatar already present on the model hierarchy.
-            foreach (var a in model.GetComponentsInChildren<Animator>(true))
-                if (a != null && a.avatar != null && a.avatar.isHuman) { animator.avatar = a.avatar; break; }
+        // ----- 1) HUMAN AVATAR (the T-pose root cause) -------------------------------------------------
+        // A HUMANOID avatar MUST be assigned to the Animator for the retargeted humanoid clips to bind to
+        // the bones. If the spawned model carries no human avatar (e.g. a Generic-imported FBX), every
+        // clip plays into nothing and the rig sits in its bind pose: a T-pose. Resolve + ASSIGN one.
+        Avatar human = ResolveHumanAvatar(model, animator);
+        if (human != null && animator.avatar != human)
+            animator.avatar = human;   // explicit assignment of the HUMAN avatar to the Animator
 
+        bool isHuman = animator.avatar != null && animator.avatar.isHuman;
+        if (isHuman)
+            Debug.Log($"[CharacterRig] {model.name}: human avatar assigned (avatar.isHuman=true) -> clips will retarget, no T-pose.");
+        else
+            Debug.LogWarning($"[CharacterRig] {model.name}: NO human avatar (avatar.isHuman=false) -> WILL T-POSE. Ensure its FBX rig = Humanoid (Resources/Models/... import must be animationType: Humanoid; right-click that FBX -> Reimport).");
+
+        // ----- 2) CONTROLLER --------------------------------------------------------------------------
+        if (animator.runtimeAnimatorController == null)
+        {
+            // PRIMARY: Resources copy of the built controller (works in editor AND player builds).
+            var controller = Resources.Load<RuntimeAnimatorController>("Controllers/Locomotion");
 #if UNITY_EDITOR
-            // 2) Otherwise pull the Humanoid avatar straight off the model's source FBX (where the mesh lives).
-            if (animator.avatar == null || !animator.avatar.isHuman)
-            {
-                var smr = model.GetComponentInChildren<SkinnedMeshRenderer>();
-                Mesh mesh = smr != null ? smr.sharedMesh : null;
-                string fbxPath = mesh != null ? UnityEditor.AssetDatabase.GetAssetPath(mesh) : null;
-                if (!string.IsNullOrEmpty(fbxPath))
-                    foreach (var obj in UnityEditor.AssetDatabase.LoadAllAssetsAtPath(fbxPath))
-                        if (obj is Avatar av && av.isHuman) { animator.avatar = av; break; }
-            }
+            // FALLBACK (editor only): load the freshly-built controller straight from the source path.
+            if (controller == null)
+                controller = UnityEditor.AssetDatabase.LoadAssetAtPath<RuntimeAnimatorController>(ControllerPath);
 #endif
-            if (animator.avatar == null || !animator.avatar.isHuman)
-                Debug.LogWarning($"[CharacterRig] No Humanoid avatar for {model.name}; it may T-pose (ensure its FBX rig = Humanoid).");
+            if (controller != null) animator.runtimeAnimatorController = controller;
+            else Debug.LogWarning($"[CharacterRig] Locomotion controller not found in Resources/Controllers/Locomotion (or at {ControllerPath}); Animator left bare.");
         }
 
-        if (animator.runtimeAnimatorController != null) return; // already wired
+        // ----- 3) BIND IMMEDIATELY (no one-frame T-pose) ----------------------------------------------
+        // Avatar + controller may have been (re)assigned AFTER the Animator first initialized this frame,
+        // which leaves the pose stale (a visible one-frame T-pose) until the next evaluation. Rebind to
+        // the new avatar/controller and force-evaluate frame 0 so the idle pose shows the instant we spawn.
+        if (isHuman && animator.runtimeAnimatorController != null)
+        {
+            try
+            {
+                animator.Rebind();
+                animator.Update(0f);
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogWarning($"[CharacterRig] {model.name}: Rebind/Update(0) skipped ({e.Message}).");
+            }
+        }
+    }
 
-        // PRIMARY: Resources copy of the built controller (works in editor AND player builds).
-        var controller = Resources.Load<RuntimeAnimatorController>("Controllers/Locomotion");
+    // Finds a HUMANOID avatar for this model, preferring one already present on the hierarchy, then (in
+    // the editor) pulling it off the source FBX. Returns null if none can be found (model will T-pose).
+    static Avatar ResolveHumanAvatar(GameObject model, Animator animator)
+    {
+        if (model == null) return null;
+
+        // Already a valid human avatar on the target Animator? Keep it.
+        if (animator != null && animator.avatar != null && animator.avatar.isHuman)
+            return animator.avatar;
+
+        // 1) Reuse any humanoid avatar already present on the model hierarchy (e.g. the raw FBX root's own
+        //    Animator after a Humanoid import, or a prefab that bakes the avatar onto a child Animator).
+        foreach (var a in model.GetComponentsInChildren<Animator>(true))
+            if (a != null && a.avatar != null && a.avatar.isHuman)
+                return a.avatar;
+
 #if UNITY_EDITOR
-        // FALLBACK (editor only): load the freshly-built controller straight from the source path.
-        if (controller == null)
-            controller = UnityEditor.AssetDatabase.LoadAssetAtPath<RuntimeAnimatorController>(ControllerPath);
+        // 2) Otherwise pull the Humanoid avatar straight off the model's source FBX (where the mesh lives).
+        //    Editor-only; a player build relies on the FBX having been imported Humanoid (the
+        //    ForceHumanoidModels postprocessor guarantees this), so step 1 supplies the avatar there.
+        var smr = model.GetComponentInChildren<SkinnedMeshRenderer>(true);
+        Mesh mesh = smr != null ? smr.sharedMesh : null;
+        string fbxPath = mesh != null ? UnityEditor.AssetDatabase.GetAssetPath(mesh) : null;
+        if (!string.IsNullOrEmpty(fbxPath))
+            foreach (var obj in UnityEditor.AssetDatabase.LoadAllAssetsAtPath(fbxPath))
+                if (obj is Avatar av && av != null && av.isHuman)
+                    return av;
 #endif
-        if (controller != null) animator.runtimeAnimatorController = controller;
-        else Debug.LogWarning($"[CharacterRig] Locomotion controller not found in Resources/Controllers/Locomotion (or at {ControllerPath}); Animator left bare.");
+        return null;
     }
 
     static Vector3[] WorldCorners(Bounds b)

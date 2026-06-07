@@ -8,6 +8,7 @@
 
 #if UNITY_EDITOR
 using System.Collections.Generic;
+using System.IO;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -47,11 +48,38 @@ public static class BuildScript
         // here programmatically so the build can never fail again on an empty Player Settings field.
         PlayerSettings.macOS.microphoneUsageDescription = "Used to talk to characters by voice.";
 
+        // Clean previous outputs FIRST so the new build is unambiguous — no stale app (date is always today's)
+        // and no leftover Burst debug folder with a zero-byte LostExpedition.app "impostor" inside it.
+        CleanBuildOutputs();
+
         Debug.Log($"[Build] Building {scenes.Count} scene(s) -> {OutPath} …");
         var report = BuildPipeline.BuildPlayer(opts);
         Debug.Log($"[Build] Result: {report.summary.result}  ({report.summary.totalSize / (1024 * 1024)} MB)  at {OutPath}");
         if (report.summary.result == UnityEditor.Build.Reporting.BuildResult.Succeeded)
+        {
+            CleanBurstDebug();   // Burst regenerates the debug folder during the build — remove the impostor
+            Debug.Log($"[Build] DONE — run {OutPath} (the only app in Builds/). Right-click → Open if macOS warns.");
             EditorUtility.RevealInFinder(OutPath);
+        }
+    }
+
+    // Delete the previous app + any *_BurstDebugInformation_DoNotShip so the build output is clean + unambiguous.
+    static void CleanBuildOutputs()
+    {
+        try { if (Directory.Exists(OutPath)) Directory.Delete(OutPath, true); }
+        catch (System.Exception e) { Debug.LogWarning($"[Build] could not remove old app: {e.Message}"); }
+        CleanBurstDebug();
+    }
+
+    static void CleanBurstDebug()
+    {
+        try
+        {
+            if (!Directory.Exists("Builds")) return;
+            foreach (var d in Directory.GetDirectories("Builds"))
+                if (d.EndsWith("_BurstDebugInformation_DoNotShip")) Directory.Delete(d, true);
+        }
+        catch (System.Exception e) { Debug.LogWarning($"[Build] could not remove Burst debug folder: {e.Message}"); }
     }
 }
 #endif

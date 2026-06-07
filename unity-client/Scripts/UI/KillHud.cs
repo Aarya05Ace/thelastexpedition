@@ -96,7 +96,9 @@ public class KillHud : MonoBehaviour
         var krt = killText.rectTransform;
         krt.anchorMin = krt.anchorMax = new Vector2(0.5f, 0.5f);
         krt.pivot = new Vector2(0.5f, 0.5f);
-        krt.anchoredPosition = new Vector2(0f, -78f);
+        // Sits clear BELOW GameHud's RELOADING bar (which is at y = -54) so a reload + a kill landing on the
+        // same frame do not crowd each other at center-bottom. -110 leaves a clean gap under the 22px reload row.
+        krt.anchoredPosition = new Vector2(0f, -110f);
         krt.sizeDelta = new Vector2(520f, 48f);
         killGroup = killText.gameObject.AddComponent<CanvasGroup>();
         killGroup.alpha = 0f;
@@ -113,6 +115,15 @@ public class KillHud : MonoBehaviour
 
     void Update()
     {
+        // IN-GAME GATE: zero the hitmarker + ELIMINATED groups unless the player is really in the world
+        // (suppressed during auth/lobby and the deploy cutscene window).
+        if (!NetworkedWorld.GameplayActive || DeployCutscene.Active)
+        {
+            if (markerGroup != null) markerGroup.alpha = 0f;
+            if (killGroup != null) killGroup.alpha = 0f;
+            return;
+        }
+
         // HITMARKER — pop in larger (1.4x) then settle to 1.0 while fading out.
         if (markerGroup != null)
         {

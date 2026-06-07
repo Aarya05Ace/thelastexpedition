@@ -74,6 +74,32 @@ public static class NpcModels
 #endif
     }
 
+    // Resolve a deterministic "female"/"male" gender for an NPC, using the SAME index logic as
+    // ResolvePrefab so the voice always agrees with the on-screen model. The model key marks gender
+    // with the token "f"/"m" before the trailing style number (e.g. "...01f_01" -> female,
+    // "...01m_02" -> male), so we test the unambiguous "f_" / "m_" pattern, NOT a bare 'f'
+    // (every key contains the 'f' in "character"/style tokens). Null-safe; never throws.
+    public static string ResolveGender(string archetypeOrName)
+    {
+        string key = (archetypeOrName ?? "").Trim().ToLowerInvariant();
+        int index;
+
+        // SAME hand-picks as ResolvePrefab so model and voice never disagree.
+        if (key.Contains("mara")) index = 0;                              // survivor — female v1
+        else if (key.Contains("eli")) index = 1;                          // cultist/guide — male v1
+        else if (key.Contains("vael") || key.Contains("brother")) index = 3; // shelter contact — male v2
+        else
+        {
+            // SAME FNV-ish hash as ResolvePrefab — keep them in lockstep.
+            uint h = 2166136261u;
+            foreach (char ch in key) { h ^= ch; h *= 16777619u; }
+            index = (int)(h % (uint)Prefabs.Length);
+        }
+
+        // "01f_" / "02f_" -> female; everything else (the "m_" prefabs) -> male.
+        return Prefabs[index].Contains("f_") ? "female" : "male";
+    }
+
     // Swap every renderer's Built-in/URP materials to HDRP so nothing renders white. Prefers a
     // by-name HDRP variant if a "Materials HDRP/" folder exists (mirrors SurvivalistModels); otherwise
     // re-shades to HDRP/Lit, migrating _MainTex/_BaseMap -> _BaseColorMap, _Color -> _BaseColor,

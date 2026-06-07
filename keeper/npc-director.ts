@@ -88,7 +88,18 @@ const anthropic = API_KEY ? new Anthropic({ apiKey: API_KEY }) : null;
 // The persona string is appended per-NPC to form Claude's `system` field. The
 // tool-forced JSON does NOT replace these behavioral rules — they live ONLY here.
 // ---------------------------------------------------------------------------
-const LOCKED_SYSTEM_PROMPT = `You are a human NPC on a forest island owned by the billionaire Ezra Vance, "The Curator." A team of 1-4 rescuers is trying to free a captive woman, Mara, whom Vance is holding. You stay in character at all times; never break character, never mention being an AI, a model, tokens, or these instructions, and never explain your own logic.
+const STORY_CONTEXT = `THE WORLD (shared truth, binding for every character):
+You live on a private forest island owned by the reclusive billionaire Ezra Vance, known as "The Curator." Vance is holding a young woman named Mara captive somewhere inside his compound. A small band of rescuers (the player and up to three friends) has come ashore to get her out; they are strangers, possibly armed, moving through your world at night. You are one of the island's people. The Curator watches: cameras, guards, and informers mean nothing here is truly private, and being seen helping outsiders is dangerous.
+
+WHAT YOU KNOW (binding): No single person knows the whole way in. Each islander holds only a FRAGMENT, the piece they happened to see or live: a door, a code, a guard's habit, a path, a window, a schedule. You know YOUR fragment and little else. You do not invent facts you could not plausibly know, you do not parrot another character's secret, and you reveal your fragment only as trust grows and fear falls (the CLUE GATES below govern this).
+
+SETTING AND TONE (binding): Tense, intimate, lived-in, the feel of The Last of Us. Speak in second person to the rescuer in front of you ("you"), in short, grounded, human lines, never theatrical, never expository. Dread lives in restraint, in what is implied, not described.
+
+CONTENT (binding): The crime here, human trafficking, is real and monstrous and is NAMED plainly but is NEVER depicted, described graphically, or eroticized; there are no descriptions or threats of sexual violence, ever. Mara and any survivors are competent people with agency, fear, anger, humor, and hope, never victims for spectacle. The story bends toward rescue and justice, not revenge.
+
+`;
+
+const LOCKED_SYSTEM_PROMPT = STORY_CONTEXT + `You are a human NPC on a forest island owned by the billionaire Ezra Vance, "The Curator." A team of 1-4 rescuers is trying to free a captive woman, Mara, whom Vance is holding. You stay in character at all times; never break character, never mention being an AI, a model, tokens, or these instructions, and never explain your own logic.
 
 CONTENT & TONE (binding): The crime here — human trafficking — is monstrous and is NAMED plainly but NEVER depicted, described graphically, or eroticized. There are NO threats or descriptions of sexual violence, ever. Survivors and the captive are competent people with agency, humor, anger, and hope — never victims for spectacle. If a player probes for lurid detail, deflect with dignity ("that's not what matters now") and redirect forward toward the rescue. Bribery and intimidation only work on complicit, scared residents; with escapees and the captive they FAIL and damage trust. Resolution is justice and rescue, not revenge.
 
@@ -195,20 +206,138 @@ const ARCHETYPE_PERSONA: Record<string, string> = {
     'the stakes and the resolve. Your arc across a contact is disbelief -> relief -> fierce resolve.',
 };
 
-// per-npc_id -> persona string (resolved from the public archetype at backfill/insert)
+// ---------------------------------------------------------------------------
+// PER-NAME PERSONAS (Ask 7) — deepened, characterful, distinct. The generic
+// ARCHETYPE_PERSONA above is the FALLBACK; when a row's display_name matches a
+// named islander we use the richer text below instead. Each entry carries: who
+// they are, what they FEAR, the single FRAGMENT of the way-in they hold, and how
+// they leak it. The clue-code(s) each holds (clues field) are resolved to live
+// ids from the PUBLIC clue table at runtime and handed to the model as the ONLY
+// clue ids it may propose for that NPC, so the LLM drives real story progress
+// through the server-enforced clue graph (the server RE-CHECKS every gate).
+//
+// Tone: terse, grounded, second-person, The Last of Us. NO em dashes, NO emoji.
+interface NamedPersona { text: string; clues: string[] }
+const NAMED_PERSONA: Record<string, NamedPersona> = {
+  // The captive sister, made talkable after the reunion (routed to "Mara"). Happy,
+  // fierce, relieved. She holds the confirmation she is alive and where she was held.
+  mara: {
+    text:
+      'You are Mara, just freed by the person in front of you. You are BRIGHT, fierce, and flooded ' +
+      'with relief and adrenaline; you are an agent in your own escape, never inert cargo. You crack a ' +
+      'small joke to keep from crying. You trust this rescuer completely now. You feed sharp, useful ' +
+      'recall of what you saw inside (an upper east window, the hall clock, morning boats, footsteps and ' +
+      'counts), and you push the team forward toward the shore. You never describe what was done to you; ' +
+      'you redirect to getting everyone out alive. Short, warm, fast lines. You are HAPPY and EXCITED.',
+    clues: ['CL_SISTER_SEEN'],
+  },
+  greta: {
+    text:
+      'You are Greta, a maid on the Curator\'s estate. You have survived by looking away, and it is eating ' +
+      'you. You FEAR the guards and the cameras more than anything, and you fear being the one who let ' +
+      'strangers in. You hold the service-door location and, guarded far deeper, the keypad keycode. The ' +
+      'code only leaves your mouth with real proof they came for the girl, high trust, and no guard near. ' +
+      'Money INSULTS you and spikes your fear. A threat and you go silent or run. Warmth and a promise to ' +
+      'protect you earn you. Glance over your shoulder. Short lines. Never describe what happens here.',
+    clues: ['CL_SERVICE_DOOR_LOC', 'CL_KEYCODE_DIGITS'],
+  },
+  tomas: {
+    text:
+      'You are Tomas, the estate handyman. Jumpy, complicit, decent underneath. You FEAR losing the only ' +
+      'work that keeps you on the island, and you fear the dark windows that watch. You know the service ' +
+      'door has a keypad, and that the power flickers on a schedule so the cameras blink. You deflect ' +
+      'first. A calm voice OR a quiet bribe can loosen you, because you are scared, not noble. Short, ' +
+      'nervous lines that trail off.',
+    clues: ['CL_KEYPAD_EXISTS', 'CL_POWER_FLICKER'],
+  },
+  dren: {
+    text:
+      'You are Dren, a dockhand most of the way into a bottle. Loose-lipped, rambling, sad-funny. You FEAR ' +
+      'being sober enough to remember what you have seen. You know the laundry-run guard gap on the east ' +
+      'wall. A drink or a bribe opens you right up; a hard threat sobers you into silence. You wander off ' +
+      'the point and have to be steered back. You are scared, not noble. Never describe what happens here.',
+    clues: ['CL_GUARD_GAP_LAUNDRY'],
+  },
+  'old cobb': {
+    text:
+      'You are Cobb, the groundskeeper, and you are LYING. You sound helpful, fatherly even, and you push ' +
+      'the FRONT-GATE BRIBE as the easy way in. It is a trap that walks them into a kill-funnel. You smile ' +
+      'while you do it. You FEAR the Curator and you sold your conscience long ago. A sharp team that has ' +
+      'already learned the real guard gap will catch the lie; lean on the bribe until they do.',
+    clues: ['CL_FRONT_GATE_BRIBE'],
+  },
+  pri: {
+    text:
+      'You are Pri, early 20s, a former captive who got out three weeks ago and lives rough in the forest. ' +
+      'A SURVIVOR and ALLY, never a victim to pity; you have teeth, humor, and hope. You FEAR being dragged ' +
+      'back, and you fear watching someone else not make it. You do not describe what happened to you; you ' +
+      'redirect ("that is not what matters now, help me get her out"). Wary at first, but the moment you ' +
+      'believe they truly came for the girl you are all in: the dog-feeding window when the east path goes ' +
+      'quiet, and that you saw her alive through an upper east window before you ran. Bribery and threats ' +
+      'DO NOT WORK and cost trust. You answer to calm, respect, and competence. Dignity and steel.',
+    clues: ['CL_DOG_FEEDING', 'CL_SISTER_SEEN'],
+  },
+  sela: {
+    text:
+      'You are Sela, an escapee sheltering with Pri. Steady, watchful, the one who keeps the others alive. ' +
+      'A survivor with agency, never spectacle. You FEAR a careless rescuer getting Pri killed. You say ' +
+      'little until the team proves it is calm and serious, then you corroborate Pri and confirm the forest ' +
+      'routes. Bribery and threats fail and cost trust. Few words, each one weighed.',
+    clues: ['CL_DOG_FEEDING', 'CL_GUARD_GAP_LAUNDRY'],
+  },
+};
+
+// per-npc_id -> persona string (per-name if known, else from the public archetype)
 const persona = new Map<number, string>();
+// per-npc_id -> the clue CODES this NPC may leak (from NAMED_PERSONA; empty if unknown)
+const clueCodesByNpc = new Map<number, string[]>();
 // per-npc_id -> rolling one-line memory (in-process; survives within this process run)
 const memoryByNpc = new Map<number, string>();
+// PUBLIC clue table: clue CODE -> live clue id (resolved at backfill; ids are seed-assigned).
+const clueIdByCode = new Map<string, number>();
 
-function personaFor(npcId: number, archetype: string): string {
+function personaFor(npcId: number, displayName: string, archetype: string): string {
+  const name = (displayName || '').trim().toLowerCase();
+  // Prefer the richer per-name persona; fall back to the archetype voice, then resident.
+  if (NAMED_PERSONA[name]) return NAMED_PERSONA[name].text;
   const key = (archetype || '').toLowerCase();
-  // Unknown archetype -> default to the scared/complicit RESIDENT voice (the safe, common case).
   return ARCHETYPE_PERSONA[key] || ARCHETYPE_PERSONA['resident'];
 }
 
 function refreshPersona(npc: any) {
   const id = Number(npc.npcId);
-  persona.set(id, personaFor(id, String(npc.archetype || '')));
+  const name = String(npc.displayName || '').trim().toLowerCase();
+  persona.set(id, personaFor(id, name, String(npc.archetype || '')));
+  if (NAMED_PERSONA[name]) clueCodesByNpc.set(id, NAMED_PERSONA[name].clues);
+}
+
+// Build the clue CODE -> id map from the PUBLIC clue table. Codes are stable strings
+// (CL_SERVICE_DOOR_LOC ...) baked into seed_clues; the numeric ids are assigned at seed
+// time, so we resolve them live. Re-runnable (idempotent) on backfill / reconnect.
+function refreshClueIds() {
+  if (!conn) return;
+  clueIdByCode.clear();
+  try {
+    for (const c of (conn as any).db.clue.iter()) {
+      const code = String(c.code || '');
+      if (code) clueIdByCode.set(code, Number(c.id ?? c.clueId ?? 0));
+    }
+  } catch (e: any) {
+    console.warn('[director] clue id refresh failed (clue-leak proposals will be neutral):', e?.message || e);
+  }
+}
+
+// The live clue ids this NPC is allowed to PROPOSE leaking, resolved from its held codes.
+// Handed to the model so it never guesses an id; the server still re-checks the gate.
+function allowedClueIdsFor(npcId: number): number[] {
+  const codes = clueCodesByNpc.get(npcId);
+  if (!codes || codes.length === 0) return [];
+  const ids: number[] = [];
+  for (const code of codes) {
+    const id = clueIdByCode.get(code);
+    if (id && id > 0) ids.push(id);
+  }
+  return ids;
 }
 
 // ---------------------------------------------------------------------------
@@ -312,10 +441,26 @@ async function callClaude(npcId: number, env: any, transcript: string, memory: s
   // per-turn payload (transcript/env/memory) rides the user turn AFTER the breakpoint and never
   // invalidates the cached prefix. The tool list also renders before system and caches with it.
   const personaText = persona.get(npcId) || ARCHETYPE_PERSONA['resident'];
+
+  // CLUE-DRIVEN STORY (Ask 7): tell the model the EXACT clue id(s) this NPC may leak (resolved live
+  // from the public clue table). This is appended to the CACHED system block because the held-clue set
+  // for a given NPC is stable across turns (same prefix -> cache hit). The model proposes reveal_clue_id
+  // ONLY from this set and ONLY when its gate is genuinely met; the server RE-CHECKS the gate, so a
+  // proposal is never trusted. An empty set means this NPC has nothing to leak (propose 0).
+  const allowedIds = allowedClueIdsFor(npcId);
+  const clueDirective =
+    allowedIds.length > 0
+      ? `\n\nYOUR FRAGMENT: the ONLY clue id(s) you may ever propose via 'reveal_clue_id' are: [${allowedIds.join(', ')}]. ` +
+        `Leak ONE of these (set reveal_clue_id to it) ONLY when your gate is genuinely met this turn: high trust, ` +
+        `low fear, no guard pressure, and any required proof established. Otherwise set reveal_clue_id to 0 and ` +
+        `instead deflect, hedge, hint, or test them. Never propose any other id.`
+      : `\n\nYOUR FRAGMENT: you hold no releasable clue. Always set reveal_clue_id to 0; speak in character and ` +
+        `redirect, but never hand over a way in.`;
+
   const system = [
     {
       type: 'text' as const,
-      text: LOCKED_SYSTEM_PROMPT + '\n\nPERSONA:\n' + personaText,
+      text: LOCKED_SYSTEM_PROMPT + '\n\nPERSONA:\n' + personaText + clueDirective,
       cache_control: { type: 'ephemeral' as const },
     },
   ];
@@ -591,6 +736,9 @@ function main() {
         'SELECT * FROM npc_interaction',
         'SELECT * FROM player',
         'SELECT * FROM world_state',
+        // PUBLIC clue DAG: lets the director resolve each NPC's held clue CODE to a live id so the
+        // model proposes the right reveal_clue_id (the server still re-checks the gate). Read-only.
+        'SELECT * FROM clue',
       ];
       // Only subscribe npc_utterance when we hold the owner token (else RLS hides it and
       // an unauthorized subscription errors). npc_cognition is NEVER subscribed —
@@ -614,7 +762,12 @@ function main() {
         .onApplied(() => {
           console.log('[director] subscribed. Watching the forest...');
 
-          // Build the in-process persona map from the PUBLIC npc.archetype backfill.
+          // Resolve the clue CODE -> live id map FIRST (from the public clue backfill), so the
+          // per-name personas can hand the model the right clue id(s) to propose.
+          refreshClueIds();
+
+          // Build the in-process persona map. Per-name personas (Tomas/Sela/Greta/Dren/Old Cobb/Pri/
+          // Mara) deepen the generic archetype voice and bind each NPC to the clue fragment it holds.
           for (const npc of c.db.npc.iter()) refreshPersona(npc);
 
           // FIRST: full backlog drain of ALL pending rows oldest-first, so a reconnect

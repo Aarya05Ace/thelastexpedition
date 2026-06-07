@@ -4,8 +4,9 @@
 // increments — that's the edge trigger: we show the dialogue, reflect the animation_trigger, and
 // (later) drive a NavMeshAgent from game_action + speak via TTS.
 //
-// Placeholders for now: color encodes the animation_trigger; an on-screen label shows the name,
-// trust/sanity, and the latest line. Real humanoid model + Animator + NavMesh + TTS are next.
+// Color encodes the animation_trigger; the new line is spoken via TTS (Speak). The always-on floating
+// name/trust/sanity label was removed; the player gets a "[V] Talk    [E] Interrogate" proximity prompt
+// from LocalPlayer instead. Real humanoid model + Animator + NavMesh are wired elsewhere.
 
 using System.Collections;
 using System.Text;
@@ -24,15 +25,23 @@ public class NpcAgent : MonoBehaviour
     public string AnimTrigger { get; private set; } = "Idle";
     public string GameActionStr { get; private set; } = "STAY_PUT";
 
+    // Per-NPC voice gender ("female"/"male"), sent to /tts so the sidecar picks a matching ElevenLabs
+    // voice. Derived from the assigned model key at spawn (see NetworkedWorld.SpawnNpc). Defaults to
+    // "male"; a missing/unknown value on the server side falls back to the default voice.
+    public string Gender { get; private set; } = "male";
+
     bool primed;
     uint lastSeq;
-    float dialogueUntil;
     Renderer rend;
     AudioSource voice;
 
-    public void Init(ulong id)
+    // gender: "female"/"male" for per-NPC TTS voice selection. Defaults to "male" so existing callers
+    // that don't pass it (and the sidecar fallback) keep working. Null-safe: a null/empty value is
+    // coerced to "male".
+    public void Init(ulong id, string gender = "male")
     {
         NpcId = id;
+        Gender = string.IsNullOrEmpty(gender) ? "male" : gender;
         rend = GetComponentInChildren<Renderer>();
         AssignIdleController();   // chat NPCs breathe with Idle_Stance_02 instead of the combat/loco rig
     }
@@ -100,11 +109,10 @@ public class NpcAgent : MonoBehaviour
         LastDialogue = string.IsNullOrEmpty(n.Dialogue) ? "" : n.Dialogue;
         AnimTrigger = string.IsNullOrEmpty(n.AnimationTrigger) ? "Idle" : n.AnimationTrigger;
         GameActionStr = string.IsNullOrEmpty(n.GameAction) ? "STAY_PUT" : n.GameAction;
-        dialogueUntil = Time.time + 6f;
         ApplyAnim(AnimTrigger);
         Debug.Log($"[NPC {DisplayName}] \"{LastDialogue}\" [{AnimTrigger}/{GameActionStr}] trust={Trust} sanity={Sanity}");
-        // ④: TTS playback of LastDialogue (POST to the Node media sidecar -> 3D AudioSource on this NPC).
-        // The OnGUI subtitle already shows LastDialogue for 6s, so TTS is purely additive/best-effort.
+        // ④: TTS playback of LastDialogue (POST to the Node media sidecar -> AudioSource on this NPC).
+        // The floating subtitle is gone, so TTS is now the primary way the reply is surfaced to the player.
         if (!string.IsNullOrEmpty(LastDialogue)) Speak(LastDialogue);
         // TODO ②: animator.SetTrigger(AnimTrigger); NavMeshAgent.destination from GameActionStr + TargetPlayer.
     }
@@ -131,7 +139,8 @@ public class NpcAgent : MonoBehaviour
 
     IEnumerator SpeakRoutine(string text)
     {
-        string json = "{\"text\":\"" + EscapeJson(text) + "\"}";
+        // Gender is a fixed "female"/"male" literal set at Init, so it needs no JSON escaping.
+        string json = "{\"text\":\"" + EscapeJson(text) + "\",\"gender\":\"" + Gender + "\"}";
         byte[] body = Encoding.UTF8.GetBytes(json);
 
         UnityWebRequest req = null;
@@ -220,26 +229,9 @@ public class NpcAgent : MonoBehaviour
         if (mat.HasProperty("_Color")) mat.SetColor("_Color", c);
     }
 
-    void OnGUI()
-    {
-        var cam = LocalPlayer.ActiveCamera != null ? LocalPlayer.ActiveCamera : Camera.main;
-        if (cam == null) return;
-        Vector3 sp = cam.WorldToScreenPoint(transform.position + Vector3.up * 2.4f);
-        if (sp.z <= 0f) return; // behind the camera
-        float y = Screen.height - sp.y;
-        DrawCentered(sp.x, y, $"{DisplayName}    trust {Trust}   sanity {Sanity}", 14, Color.white);
-        if (Time.time < dialogueUntil && LastDialogue.Length > 0)
-            DrawCentered(sp.x, y + 22, $"“{LastDialogue}”", 13, new Color(1f, 0.9f, 0.72f));
-    }
-
-    static void DrawCentered(float cx, float top, string text, int size, Color col)
-    {
-        var style = new GUIStyle(GUI.skin.label) { fontSize = size, alignment = TextAnchor.UpperCenter, wordWrap = true };
-        const float w = 380f, h = 96f;
-        float x = cx - w / 2f;
-        style.normal.textColor = Color.black;
-        GUI.Label(new Rect(x + 1, top + 1, w, h), text, style); // shadow
-        style.normal.textColor = col;
-        GUI.Label(new Rect(x, top, w, h), text, style);
-    }
+    // Ask 5: the always-on floating name/trust/sanity label (and the per-line subtitle) are REMOVED. The
+    // player now sees a clean "[V] Talk    [E] Interrogate" proximity prompt drawn by LocalPlayer.OnGUI when
+    // near the nearest NPC. DisplayName/Trust/Sanity remain as public state (LocalPlayer reads DisplayName);
+    // dialogueUntil/LastDialogue are still set in React (and consumed by Speak/TTS), just no longer rendered
+    // here. No OnGUI in this class anymore.
 }

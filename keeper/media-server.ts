@@ -1,6 +1,7 @@
 // media-server.ts — voice I/O sidecar for The Lost Expedition.
 //
-//   POST /tts  { text, voiceId? }   -> ElevenLabs  -> audio/mpeg   (NPC / billionaire speaks)
+//   POST /tts  { text, voiceId?, gender? } -> ElevenLabs -> audio/mpeg (NPC / billionaire speaks)
+//              voiceId wins; else gender ("female"/"male") maps to a per-gender voice; else default.
 //   POST /stt  (raw audio body; ?ext=wav|m4a|webm) -> OpenAI Whisper -> { text } (player speech)
 //   GET  /health
 //
@@ -14,6 +15,9 @@ const PORT = Number(process.env.MEDIA_PORT || 8787);
 const OPENAI_KEY = process.env.OPENAI_API_KEY || '';
 const ELEVEN_KEY = process.env.ELEVENLABS_API_KEY || '';
 const DEFAULT_VOICE = process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM';
+// Per-gender public ElevenLabs voices (chosen by the `gender` field on /tts requests).
+const VOICE_FEMALE = '21m00Tcm4TlvDq8ikWAM'; // ElevenLabs "Rachel"
+const VOICE_MALE = 'pNInz6obpgDQGcFmaJgB'; // ElevenLabs "Adam"
 
 function readBody(req: http.IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -40,9 +44,14 @@ const server = http.createServer(async (req, res) => {
 
     // ---- TTS: text -> ElevenLabs -> mp3 ----
     if (req.method === 'POST' && url.pathname === '/tts') {
-      const { text, voiceId } = JSON.parse((await readBody(req)).toString() || '{}');
+      const { text, voiceId, gender } = JSON.parse((await readBody(req)).toString() || '{}');
       if (!text) { res.writeHead(400); res.end('missing text'); return; }
-      const vid = voiceId || DEFAULT_VOICE;
+      // Voice selection priority: explicit voiceId override -> per-gender map -> existing default.
+      // A request with neither field (e.g. TtsPlayer) still resolves to DEFAULT_VOICE (backward-compatible).
+      const vid = voiceId
+        || (gender === 'female' ? VOICE_FEMALE
+          : gender === 'male' ? VOICE_MALE
+          : DEFAULT_VOICE);
       const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${vid}`, {
         method: 'POST',
         headers: { 'xi-api-key': ELEVEN_KEY, 'content-type': 'application/json', accept: 'audio/mpeg' },

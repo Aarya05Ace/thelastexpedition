@@ -1,4 +1,4 @@
-// PatronPresenter.cs — THE LOST EXPEDITION lobby: The Patron (billionaire) presence (PART A + PART D).
+// PatronPresenter.cs - THE LOST EXPEDITION lobby: The Patron (billionaire) presence (PART A + PART D).
 //
 // Spawns the suit (CharacterLibrary.suitPrefab) standing near the campfire FACING the lineup, seated on
 // the real terrain via the shared GroundY raycast. Subscribes to the single-row Billionaire table and
@@ -119,9 +119,10 @@ public class PatronPresenter : MonoBehaviour
     void ShowBubble(string dialogue, bool addressedToMe)
     {
         if (bubbleGroup == null || !activated) return;
-        string body = string.IsNullOrEmpty(dialogue) ? "…" : dialogue;
-        if (addressedToMe) body = "(to you) " + body;
-        body = "[The Patron]\n" + body;
+        string line = string.IsNullOrEmpty(dialogue) ? "..." : dialogue;
+        if (addressedToMe) line = "(to you) " + line;
+        // Curator presentation: an ominous quote with a quiet attribution line, no glyphs.
+        string body = "\"" + line + "\"\nTHE CURATOR";
         bubbleFg.text = body;
         bubbleFg.color = addressedToMe ? LobbyUI.Ember : LobbyUI.PatronGold;
         bubbleGroup.alpha = 1f;
@@ -161,7 +162,7 @@ public class PatronPresenter : MonoBehaviour
         bubbleGroup.interactable = false;
         bubbleGroup.blocksRaycasts = false;
 
-        var panel = LobbyUI.RoundedPanel(bubbleRoot, "Bubble", LobbyUI.BgDeep, 16);
+        var panel = LobbyUI.RoundedPanel(bubbleRoot, "Bubble", LobbyUI.BgDeep, 6);
         panel.rectTransform.anchorMin = Vector2.zero; panel.rectTransform.anchorMax = Vector2.one;
         panel.rectTransform.offsetMin = Vector2.zero; panel.rectTransform.offsetMax = Vector2.zero;
         LobbyUI.Border(panel.rectTransform, LobbyUI.EmberDim, 1.5f);
@@ -173,6 +174,7 @@ public class PatronPresenter : MonoBehaviour
         bubbleTail.localRotation = Quaternion.Euler(0, 0, 45f);
 
         bubbleFg = LobbyUI.Label(bubbleRoot, "", 18, LobbyUI.PatronGold, TextAnchor.MiddleCenter);
+        StorySequencer.Apply(bubbleFg, StorySequencer.Weight.Light);   // Barlow Light = ominous quote feel
         bubbleFg.horizontalOverflow = HorizontalWrapMode.Wrap;
         bubbleFg.verticalOverflow = VerticalWrapMode.Overflow;
         bubbleFg.rectTransform.anchorMin = Vector2.zero; bubbleFg.rectTransform.anchorMax = Vector2.one;

@@ -65,6 +65,10 @@ public class GameHud : MonoBehaviour
     // crosshair (centered; shown only while the AK is out)
     RectTransform crosshair;
 
+    // ammo + reload readout (bottom-right ammo counter; centered RELOADING text under the crosshair)
+    Text ammoLabel;
+    Text reloadLabel;
+
     // =================================================================================================
     // SELF-BOOTSTRAP
     // =================================================================================================
@@ -145,6 +149,34 @@ public class GameHud : MonoBehaviour
         BuildBars(root);
         BuildInventory(root);
         BuildCrosshair(root);
+        BuildAmmo(root);
+    }
+
+    // ---- BOTTOM-RIGHT ammo counter + CENTER "RELOADING" indicator ----
+    void BuildAmmo(RectTransform root)
+    {
+        // Ammo counter, bottom-right (mirrors the bars/inventory placement style). Big bold number "25 / 25".
+        ammoLabel = LobbyUI.ShadowLabel(root, "", 30, Color.white, TextAnchor.LowerRight);
+        var art = ammoLabel.rectTransform;
+        art.anchorMin = new Vector2(1f, 0f); art.anchorMax = new Vector2(1f, 0f);
+        art.pivot = new Vector2(1f, 0f);
+        art.anchoredPosition = new Vector2(-56f, 96f);
+        art.sizeDelta = new Vector2(220f, 44f);
+
+        // "RELOADING" indicator, centered just BELOW the crosshair. Hidden by default; toggled in Update.
+        reloadLabel = LobbyUI.ShadowLabel(root, "RELOADING", 22, new Color(1f, 0.6f, 0.18f, 1f), TextAnchor.MiddleCenter);
+        var rrt = reloadLabel.rectTransform;
+        rrt.anchorMin = new Vector2(0.5f, 0.5f); rrt.anchorMax = new Vector2(0.5f, 0.5f);
+        rrt.pivot = new Vector2(0.5f, 0.5f);
+        rrt.anchoredPosition = new Vector2(0f, -54f);   // under the 48px crosshair
+        rrt.sizeDelta = new Vector2(260f, 32f);
+        reloadLabel.gameObject.SetActive(false);
+    }
+
+    // Resolve the local player's AK weapon through the contract API, fully null-guarded.
+    Weapon SafeAkWeapon()
+    {
+        try { return loadout != null ? loadout.AkWeapon : null; } catch { return null; }
     }
 
     // ---- CENTER red crosshair (4 ticks + a dot; hidden unless the AK is out) ----
@@ -452,6 +484,16 @@ public class GameHud : MonoBehaviour
 
     void Update()
     {
+        // IN-GAME GATE: hide the whole HUD canvas (bars, crosshair, ammo, RELOADING, vignette) unless the
+        // player is really in the world. False during auth/lobby; the deploy cutscene window is also suppressed.
+        var gate = GetComponent<CanvasGroup>();
+        if (!NetworkedWorld.GameplayActive || DeployCutscene.Active)
+        {
+            if (gate != null) gate.alpha = 0f;
+            return;
+        }
+        if (gate != null) gate.alpha = 1f;
+
         // BLOOD VIGNETTE: target = peak right after a hit (RecoveryProgress01 = 1), decaying to 0 across the
         // 5s recovery. MoveTowards is fast (1/VignetteFadeIn) so it FADES IN ~0.25s, then tracks the slow
         // RecoveryProgress01 decay on the way down (FADE OUT over 5s) — perfectly synced with the +5 heal.
@@ -468,10 +510,38 @@ public class GameHud : MonoBehaviour
         if (health != null) RefreshBars(health);
 
         // Crosshair: visible whenever the player is alive (the death screen covers it otherwise).
+        bool aliveNow = health == null || !health.IsDead;
         if (crosshair != null)
         {
-            bool alive = health == null || !health.IsDead;
-            if (crosshair.gameObject.activeSelf != alive) crosshair.gameObject.SetActive(alive);
+            if (crosshair.gameObject.activeSelf != aliveNow) crosshair.gameObject.SetActive(aliveNow);
         }
+
+        // AMMO + RELOADING: only while the AK is out and the player is alive (mirrors the crosshair gate).
+        bool akOut = SafeAkOut(loadout);
+        var w = SafeAkWeapon();
+        bool showAmmo = aliveNow && akOut && w != null;
+
+        if (ammoLabel != null)
+        {
+            if (ammoLabel.gameObject.activeSelf != showAmmo) ammoLabel.gameObject.SetActive(showAmmo);
+            if (showAmmo) ammoLabel.text = w.RoundsLeft + " / " + w.MagazineSize;
+        }
+        if (reloadLabel != null)
+        {
+            bool showReload = showAmmo && w.IsReloading;
+            if (reloadLabel.gameObject.activeSelf != showReload) reloadLabel.gameObject.SetActive(showReload);
+            // Show the reload as a TIMED beat: a 10-segment bar that fills as the mag swaps, so the player reads
+            // exactly when the gun comes back instead of staring at a static word. Side-effect-free progress read.
+            if (showReload)
+            {
+                int filled = Mathf.Clamp(Mathf.RoundToInt(w.ReloadProgress01 * 10f), 0, 10);
+                reloadLabel.text = "RELOADING " + new string('|', filled) + new string('.', 10 - filled);
+            }
+        }
+    }
+
+    static bool SafeAkOut(PlayerLoadout l)
+    {
+        try { return l != null && l.AkOut; } catch { return false; }
     }
 }

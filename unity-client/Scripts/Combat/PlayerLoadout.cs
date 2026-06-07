@@ -153,7 +153,7 @@ public class PlayerLoadout : MonoBehaviour
         }
 
         if (isFallback) Debug.LogWarning("[PlayerLoadout] SM_Bread_03 prefab unavailable; using bread-tan fallback box.");
-        Debug.Log($"[PlayerLoadout] Bread built — source={(isFallback ? "FALLBACK CUBE" : "SM_Bread_03 prefab")}, handBone={(breadHand != null ? breadHand.name : "NONE (parked on root)")}, longestBound={longest:F3}m, worldScale={s:F3}");
+        Debug.Log($"[PlayerLoadout] Bread built. source={(isFallback ? "FALLBACK CUBE" : "SM_Bread_03 prefab")}, handBone={(breadHand != null ? breadHand.name : "NONE (parked on root)")}, longestBound={longest:F3}m, worldScale={s:F3}");
 
         breadModel.SetActive(false);
     }
@@ -271,6 +271,17 @@ public class PlayerLoadout : MonoBehaviour
 
         if (anim != null && anim.runtimeAnimatorController != null)
             anim.SetBool("Armed", ak);
+    }
+
+    // Lower / raise the rifle for a reload. Drops the Animator "Armed" bool (so the upper-body Combat layer
+    // falls back to the lowered locomotion pose, reading as "swap the mag") while r is true, then restores it.
+    // Only ever writes Armed while the AK is the selected slot, so it never fights ApplyVisibility's own writes
+    // (which run on Select). Null-safe + guarded on a live controller, exactly like ApplyVisibility.
+    public void SetReloading(bool r)
+    {
+        if (!AkOut) return;   // only meaningful with the rifle out; holstered/bread states own Armed themselves
+        if (anim != null && anim.runtimeAnimatorController != null)
+            anim.SetBool("Armed", !r);
     }
 
     // Use the currently selected item. Only the bread (slot 2) does anything: play a procedural eat (arc to

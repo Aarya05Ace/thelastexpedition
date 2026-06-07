@@ -1,4 +1,4 @@
-// Health.cs — the damage receiver every combatant (player, ally, enemy) carries.
+// Health.cs. the damage receiver every combatant (player, ally, enemy) carries.
 //
 // Raycasts from Weapon.TryFire resolve a hit collider up to this component via GetComponentInParent<Health>(),
 // so Health must live on the SAME root GameObject that CharacterRig.Apply put the collider on
@@ -25,7 +25,7 @@ public class Health : MonoBehaviour
     public Faction faction = Faction.Neutral;
 
     [Tooltip("PLOT ARMOR: incoming damage is multiplied by this. 1 = normal (AI). The human player sets <1 " +
-             "so the AI can't melt them — survivability for fun.")]
+             "so the AI can't melt them (survivability for fun).")]
     public float damageTakenMultiplier = 1f;
 
     [Tooltip("ON-HIT RECOVERY: GREEN HP healed per second for 'recoveryDuration' seconds after taking damage " +
@@ -36,7 +36,7 @@ public class Health : MonoBehaviour
 
     float recoveryTimer;   // counts down recoveryDuration -> 0 after each hit
 
-    // 1 right after a hit, decaying to 0 as the recovery finishes — the HUD drives the blood-vignette fade from this.
+    // 1 right after a hit, decaying to 0 as the recovery finishes (the HUD drives the blood-vignette fade from this).
     public float RecoveryProgress01 => recoveryDuration > 0f ? Mathf.Clamp01(recoveryTimer / recoveryDuration) : 0f;
 
     // Current GREEN health, clamped to [0, maxHealth]. Initialised on first use from maxHealth.
@@ -45,11 +45,11 @@ public class Health : MonoBehaviour
     public float CurrentShield { get; private set; }
     public bool IsDead { get; private set; }
 
-    // (victim, attackerFaction) — fired on every successful (non-ignored) damage application (HUD blood vignette).
+    // (victim, attackerFaction). fired on every successful (non-ignored) damage application (HUD blood vignette).
     public System.Action<Health, Faction> OnDamaged;
-    // (victim) — fired exactly once when CurrentHealth first reaches 0.
+    // (victim). fired exactly once when CurrentHealth first reaches 0.
     public System.Action<Health> OnDied;
-    // (victim) — fired on ANY health/shield change incl. damage, heal and reset (HUD bars bind to this).
+    // (victim). fired on ANY health/shield change incl. damage, heal and reset (HUD bars bind to this).
     public System.Action<Health> OnChanged;
 
     bool initialised;
@@ -60,7 +60,7 @@ public class Health : MonoBehaviour
     }
 
     // ON-HIT RECOVERY (player only; AI leaves recoveryHealPerSec = 0). For 'recoveryDuration' seconds after a
-    // hit, heal GREEN health by recoveryHealPerSec/sec — this is the passive +5 that runs as the blood
+    // hit, heal GREEN health by recoveryHealPerSec/sec (this is the passive +5 that runs as the blood
     // vignette fades out. Heal() fires OnChanged so the bar updates live.
     void Update()
     {

@@ -17,8 +17,10 @@ public class Weapon : MonoBehaviour
     [Tooltip("Shots per second; gates TryFire via CanFire.")]
     public float fireRate = 8f;
 
-    [Tooltip("Maximum raycast distance, metres.")]
-    public float range = 120f;
+    [Tooltip("Maximum raycast distance, metres. Generous so a clear player shot reaches guards strung along " +
+             "the whole gauntlet (the island is ~500 m). This does NOT make the AI snipe: CombatAI clamps its " +
+             "own engage range to Mathf.Min(WeaponRange, sightRange) and sightRange stays small (~18 m).")]
+    public float range = 500f;
 
     [Tooltip("Bullet origin + tracer/flash spawn point. Falls back to this.transform if null.")]
     public Transform muzzle;
@@ -29,10 +31,93 @@ public class Weapon : MonoBehaviour
     [Tooltip("Tracer/flash lifetime, seconds.")]
     public float vfxLifetime = 0.05f;
 
+    [Tooltip("Rounds per magazine. After this many shots the shooter reloads.")]
+    public int magazineSize = 25;
+
+    [Tooltip("Seconds the reload takes; firing is blocked for this window, then the mag refills.")]
+    public float reloadDuration = 2.2f;
+
+    [Tooltip("Extra random aim error half-angle (deg) applied to EVERY shot from this weapon (gun-feel spread). The player weapon keeps this small; the AI adds its own larger cone on top.")]
+    public float baseSpreadDeg = 0f;
+
     float nextFireTime;
 
-    // Cooldown elapsed and ready to fire again.
-    public bool CanFire => Time.time >= nextFireTime;
+    // Magazine state. roundsLeft is lazily initialised the first shot if Awake has not run yet, so the
+    // weapon is correct even when fetched the same frame it is mounted (PlayerLoadout / CombatAI both poke it).
+    int roundsLeft = -1;          // -1 = not yet initialised
+    float reloadEndTime;          // Time.time at which an in-flight reload completes (0 = not reloading)
+
+    void Awake()
+    {
+        if (roundsLeft < 0) roundsLeft = Mathf.Max(1, magazineSize);
+    }
+
+    // Ensure the magazine is initialised even if a caller reads state before Awake ran.
+    void EnsureInit()
+    {
+        if (roundsLeft < 0) roundsLeft = Mathf.Max(1, magazineSize);
+    }
+
+    // ---- magazine / reload (the SINGLE owner of fire-availability for player AND AI) -----------------
+
+    // True while a reload is in progress (no shot can leave the barrel). Completing the reload (refilling
+    // the mag) is done lazily here so no coroutine / Update is required: the moment the window elapses the
+    // mag is topped up. Both the player HUD and CombatAI poll this to show the lowered-weapon / RELOADING cue.
+    public bool IsReloading
+    {
+        get
+        {
+            if (reloadEndTime <= 0f) return false;
+            if (Time.time >= reloadEndTime)
+            {
+                // Reload finished: refill and clear the flag.
+                roundsLeft = Mathf.Max(1, magazineSize);
+                reloadEndTime = 0f;
+                return false;
+            }
+            return true;
+        }
+    }
+
+    // HUD readouts.
+    public int RoundsLeft { get { EnsureInit(); return roundsLeft; } }
+    public int MagazineSize => Mathf.Max(1, magazineSize);
+
+    // Reload progress 0..1 (0 = just started, 1 = complete / not reloading). Read-only, side-effect-free: it
+    // does NOT trigger the lazy refill (that is owned by IsReloading), so the HUD can poll it freely. Lets the
+    // player read the EXACT length of the out-of-ammo window (the same window the design wants you to push on
+    // enemies), so the reload reads as a real, timed beat instead of a static word.
+    public float ReloadProgress01
+    {
+        get
+        {
+            if (reloadEndTime <= 0f) return 1f;
+            float dur = Mathf.Max(0.1f, reloadDuration);
+            float remaining = reloadEndTime - Time.time;
+            return Mathf.Clamp01(1f - remaining / dur);
+        }
+    }
+
+    // Begin a reload if not already reloading and the mag is not already full. Idempotent + null-safe.
+    public void BeginReload()
+    {
+        EnsureInit();
+        if (IsReloading) return;
+        if (roundsLeft >= MagazineSize) return;
+        reloadEndTime = Time.time + Mathf.Max(0.1f, reloadDuration);
+    }
+
+    // Player manual reload (R key). Returns true if a reload actually started (so callers can play the cue).
+    public bool TryManualReload()
+    {
+        EnsureInit();
+        if (IsReloading || roundsLeft >= MagazineSize) return false;
+        BeginReload();
+        return true;
+    }
+
+    // Cooldown elapsed AND not mid-reload AND at least one round chambered.
+    public bool CanFire => Time.time >= nextFireTime && !IsReloading && RoundsLeft > 0;
 
     // Last discharged shot's outcome (for the player's +5-on-kill). Reset at the top of every fired shot, so a
     // shot that hits a wall or nothing leaves these at null/false.
@@ -50,12 +135,24 @@ public class Weapon : MonoBehaviour
         float interval = fireRate > 0f ? 1f / fireRate : 0.1f;
         nextFireTime = Time.time + interval;
 
+        // Consume a round. CanFire already guaranteed RoundsLeft > 0 above.
+        EnsureInit();
+        roundsLeft--;
+
         // Clear last-shot outcome so a miss (wall / nothing) leaves null/false.
         LastHit = null;
         LastHitKilled = false;
 
         if (dir.sqrMagnitude < 1e-6f) dir = Vector3.forward;
         dir = dir.normalized;
+
+        // Per-weapon base spread for gun feel (a small constant cone). The AI adds a larger cone on top of
+        // this in CombatAI before calling TryFire; the player passes a near-pinpoint dir and relies on this.
+        if (baseSpreadDeg > 0f)
+        {
+            Vector3 jitter = dir + Random.insideUnitSphere * Mathf.Tan(baseSpreadDeg * Mathf.Deg2Rad);
+            if (jitter.sqrMagnitude > 1e-6f) dir = jitter.normalized;
+        }
 
         Vector3 endPoint = origin + dir * range;
 
@@ -77,7 +174,10 @@ public class Weapon : MonoBehaviour
                 {
                     // A combatant collider: skip own/friendly/dead bodies and keep scanning,
                     // but DON'T let them block the bullet visually.
-                    if (health.faction == shooter || health.IsDead) continue;
+                    // NEUTRALS (the sister / civilians) are NON-COMBATANTS: a bullet passes THROUGH them and
+                    // never damages them, so a stray shot or the AI's spread cone can't gun her down during the
+                    // escort. (CombatAI already refuses to aim AT neutrals; this guarantees the path-of-fire too.)
+                    if (health.faction == shooter || health.faction == Faction.Neutral || health.IsDead) continue;
 
                     bool wasDead = health.IsDead;          // false here (dead bodies were skipped above)
                     health.TakeDamage(damage, shooter);
@@ -100,6 +200,10 @@ public class Weapon : MonoBehaviour
         Vector3 tracerStart = muzzle != null ? muzzle.position : origin;
         SpawnTracer(tracerStart, endPoint);
         SpawnFlash(origin);
+
+        // Out of ammo on THIS shot -> auto-reload. CanFire will block further shots until the window elapses,
+        // for BOTH the player and the AI (both gate on CanFire), so neither becomes an infinite-fire turret.
+        if (roundsLeft <= 0) BeginReload();
         return true;
     }
 

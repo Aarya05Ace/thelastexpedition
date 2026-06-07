@@ -1,20 +1,23 @@
-// DeathScreen.cs — THE LOST EXPEDITION: full-screen "YOU DIED" overlay + REPLAY.
+// DeathScreen.cs. THE LOST EXPEDITION: full-screen "YOU DIED" overlay -> RETURN TO LOBBY.
 //
-// A self-bootstrapping ScreenSpaceOverlay overlay that lives ABOVE the in-game HUD
-// (sortingOrder 200 vs the HUD's 100). It waits for the LOCAL player to spawn
-// (PlayerCombat.Local, null until then), binds to that player's Health.OnDied, and on
-// death fades in a dark vignette/tint with a large bold "YOU DIED" title, a one-line
-// subtitle, and a prominent REPLAY button. REPLAY -> PlayerCombat.Local.Respawn() then
-// hide. While shown: CanvasGroup blocks raycasts + the cursor is unlocked/visible; while
-// hidden: alpha 0 + no raycast (gameplay aims/fires straight through).
+// DEATH IS TERMINAL (Fortnite, one life per deploy). A self-bootstrapping ScreenSpaceOverlay
+// that lives ABOVE the in-game HUD (sortingOrder 200 vs the HUD's 100). It waits for the LOCAL
+// player to spawn (PlayerCombat.Local, null until then), binds to that player's Health.OnDied,
+// and on death fades in a dark vignette/tint with a large bold "YOU DIED" title, a one-line
+// subtitle, and a RETURN TO LOBBY button. There is NO in-place respawn: after a brief death beat
+// the screen AUTO-returns to the lobby (the button is the manual skip). Returning reloads the
+// forest scene via LobbyBootstrap.ReturnToLobby(). GameManager survives (DontDestroyOnLoad) and
+// the saved token auto-logs-in straight back to the lobby to re-queue + DEPLOY for a fresh life.
+// While shown: CanvasGroup blocks raycasts + the cursor is unlocked/visible; while hidden:
+// alpha 0 + no raycast (gameplay aims/fires straight through).
 //
-// Pure Unity (UnityEngine + UnityEngine.UI + LobbyUI helpers) — no SpacetimeDB, no
+// Pure Unity (UnityEngine + UnityEngine.UI + LobbyUI helpers). No SpacetimeDB, no
 // Vector3 alias, no UnityEditor use. Null-safe throughout: a destroyed/absent player never
 // throws. Authored against the SHARED CONTRACT surface of PlayerCombat:
 //     public static PlayerCombat Local { get; }
 //     public Health Health { get; }
-//     public void Respawn();
-// (Those land from the BUILD-'player' agent; this file must compile alongside them.)
+//     public bool IsDeadTerminal { get; }
+// plus LobbyBootstrap.ReturnToLobby() for the return path.
 
 using System.Collections;
 using UnityEngine;
@@ -22,10 +25,16 @@ using UnityEngine.UI;
 
 public class DeathScreen : MonoBehaviour
 {
-    // ---- self-bootstrap: one host that waits for PlayerCombat.Local, then binds (and re-binds) ----
+    // ---- self-bootstrap: ONE persistent host that waits for PlayerCombat.Local, then binds (and re-binds) ----
+    // This runs on EVERY scene load (AfterSceneLoad). The host is DontDestroyOnLoad, so on the RETURN TO LOBBY
+    // reload it would otherwise spawn a SECOND overlay. Guard with a singleton so exactly one ever exists across
+    // reloads (extra deaths -> extra reloads must not stack overlays).
+    static DeathScreen _instance;
+
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void Bootstrap()
     {
+        if (_instance != null) return;   // already have a persistent host (survived a scene reload)
         var host = new GameObject("DeathScreenHost");
         Object.DontDestroyOnLoad(host);
         host.AddComponent<DeathScreen>();
@@ -48,12 +57,21 @@ public class DeathScreen : MonoBehaviour
     const float FadeTime = 0.4f;
     const float TintMaxAlpha = 0.82f;
 
+    // ---- death beat -> auto return-to-lobby ----
+    Coroutine _beatCo;
+    bool _returning;               // latched once the return-to-lobby is committed (idempotent; survives reload)
+    const float DeathBeat = 2.2f;  // seconds the "YOU DIED" beat holds before auto-returning to the lobby
+
     // ---- cursor restore ----
     CursorLockMode _prevLock = CursorLockMode.Locked;
     bool _prevCursorVisible = false;
 
     void Awake()
     {
+        // Singleton: if a persistent host already exists (e.g. a stray duplicate), destroy this one.
+        if (_instance != null && _instance != this) { Destroy(gameObject); return; }
+        _instance = this;
+
         BuildUI();
         HideImmediate();
     }
@@ -71,6 +89,7 @@ public class DeathScreen : MonoBehaviour
     void OnDestroy()
     {
         Unbind();
+        if (_instance == this) _instance = null;
     }
 
     // ===== binding =====
@@ -82,7 +101,7 @@ public class DeathScreen : MonoBehaviour
     }
 
     // The lobby's EventSystem is destroyed on launch (LobbyBootstrap.Teardown), so gameplay has NO
-    // EventSystem and uGUI clicks (incl. REPLAY) silently do nothing. Create a persistent one if missing.
+    // EventSystem and uGUI clicks (incl. RETURN TO LOBBY) silently do nothing. Create a persistent one if missing.
     static void EnsureEventSystem()
     {
         if (UnityEngine.EventSystems.EventSystem.current != null) return;
@@ -102,6 +121,15 @@ public class DeathScreen : MonoBehaviour
         if (_boundHealth != null)
             _boundHealth.OnDied += OnDied;
 
+        // A NEW, LIVE body has spawned (the next life after RETURN TO LOBBY -> re-DEPLOY). Clear the terminal
+        // 'returning' latch so this fresh life's death can show the screen again, and stop any stale beat. The
+        // overlay persists across the reload, so without this reset the second death would be silently swallowed.
+        if (_boundHealth != null && !_boundHealth.IsDead)
+        {
+            _returning = false;
+            if (_beatCo != null) { StopCoroutine(_beatCo); _beatCo = null; }
+        }
+
         // A fresh body should never start on the death screen.
         if (_shown && (_boundHealth == null || !_boundHealth.IsDead))
             HideImmediate();
@@ -115,24 +143,51 @@ public class DeathScreen : MonoBehaviour
         _boundPlayer = null;
     }
 
-    // ===== death / replay =====
+    // ===== death / return to lobby =====
 
     void OnDied(Health h)
     {
-        if (_shown) return;        // don't restack the fade if OnDied somehow fires twice
+        if (_shown || _returning) return;   // don't restack the beat if OnDied somehow fires twice
         Show();
+
+        // Hold the death beat, then auto-return to the lobby. The RETURN TO LOBBY button shortcuts the wait.
+        if (_beatCo != null) StopCoroutine(_beatCo);
+        if (isActiveAndEnabled) _beatCo = StartCoroutine(DeathBeatThenReturn());
     }
 
-    void OnReplay()
+    IEnumerator DeathBeatThenReturn()
     {
-        // Restore gameplay capture FIRST so a destroyed player can't leave the cursor freed.
+        // Unscaled so the beat holds even if anything paused the game.
+        float t = 0f;
+        while (t < DeathBeat && !_returning)
+        {
+            t += Time.unscaledDeltaTime;
+            yield return null;
+        }
+        _beatCo = null;
+        ReturnToLobby();
+    }
+
+    // Button + auto-beat both land here. Idempotent: only fires the reload once.
+    void ReturnToLobby()
+    {
+        if (_returning) return;
+        _returning = true;
+
+        if (_beatCo != null) { StopCoroutine(_beatCo); _beatCo = null; }
+
+        // Restore gameplay cursor capture FIRST so the freed-cursor state can't leak into the rebuilt lobby
+        // before its own ApplyPhaseVisibility re-frees it (defensive; the lobby re-frees the cursor anyway).
         Cursor.lockState = _prevLock;
         Cursor.visible = _prevCursorVisible;
 
-        var local = SafeLocal();
-        if (local != null) local.Respawn();   // ResetFull health + InputDisabled=false + re-holster
+        // The overlay persists across the scene reload (DontDestroyOnLoad), so hide it NOW so the parchment/
+        // tint does not linger over the freshly rebuilt lobby. On the reloaded scene Local == null -> stays hidden.
+        HideImmediate();
 
-        Hide();
+        // Reload the forest scene: GameManager survives, the saved token auto-logs-in, the lobby rebuilds at
+        // Connecting -> Auth -> Lobby. ReturnToLobby() also flips GameplayActive=false so nothing respawns mid-reload.
+        LobbyBootstrap.ReturnToLobby();
     }
 
     // ===== show / hide =====
@@ -142,11 +197,11 @@ public class DeathScreen : MonoBehaviour
         if (_shown) return;
         _shown = true;
 
-        // The lobby destroyed its EventSystem on launch, so gameplay has none -> the REPLAY button can't be
-        // clicked. Guarantee one exists before showing the screen.
+        // The lobby destroyed its EventSystem on launch, so gameplay has none -> the RETURN TO LOBBY button can't
+        // be clicked. Guarantee one exists before showing the screen.
         EnsureEventSystem();
 
-        // Free the cursor for the REPLAY button; cache the previous state to restore on replay.
+        // Free the cursor for the RETURN TO LOBBY button; cache the previous state to restore on return.
         _prevLock = Cursor.lockState;
         _prevCursorVisible = Cursor.visible;
         Cursor.lockState = CursorLockMode.None;
@@ -264,17 +319,17 @@ public class DeathScreen : MonoBehaviour
                       new Vector2(0.5f, 0.5f), new Vector2(0f, 90f), new Vector2(900f, 120f));
 
         // --- subtitle ---
-        var sub = LobbyUI.ShadowLabel(root, "The expedition presses on without you.",
+        var sub = LobbyUI.ShadowLabel(root, "The expedition presses on without you. Returning to the lobby.",
                                       LobbyUI.BodySize, LobbyUI.AshDim, TextAnchor.MiddleCenter);
         LobbyUI.Place(sub.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
                       new Vector2(0.5f, 0.5f), new Vector2(0f, 30f), new Vector2(900f, 40f));
 
-        // --- REPLAY button ---
-        var btn = LobbyUI.RoundedButton(root, "REPLAY", LobbyUI.Ember,
+        // --- RETURN TO LOBBY button (manual skip of the death beat; the screen auto-returns regardless) ---
+        var btn = LobbyUI.RoundedButton(root, "RETURN TO LOBBY", LobbyUI.Ember,
                                         new Color(0.05f, 0.03f, 0.02f, 1f), 12);
         LobbyUI.Place(btn.GetComponent<RectTransform>(), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
-                      new Vector2(0.5f, 0.5f), new Vector2(0f, -60f), new Vector2(280f, 64f));
-        btn.onClick.AddListener(OnReplay);
+                      new Vector2(0.5f, 0.5f), new Vector2(0f, -60f), new Vector2(320f, 64f));
+        btn.onClick.AddListener(ReturnToLobby);
     }
 
     static void Stretch(RectTransform rt)

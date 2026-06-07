@@ -1,4 +1,4 @@
-// CharacterCarousel.cs — THE LOST EXPEDITION lobby: the PODIUM STAGE (PART B + PART A gate + PART C scope).
+// CharacterCarousel.cs - THE LOST EXPEDITION lobby: the PODIUM STAGE (PART B + PART A gate + PART C scope).
 //
 // Renders a straight, camera-FACING ROW of PARTY_SLOTS=6 glowing platforms by the campfire. Each
 // occupied slot = a live survivalist model (capsule fallback) standing on a CharacterPodium disc, with
@@ -6,10 +6,10 @@
 // glowing '+'. The LOCAL player cycles their OWN character (HUD < > arrows + A/D here) -> SetCharacter;
 // the local model swaps live; the authoritative LobbyMember.OnUpdate re-syncs it.
 //
-// PART C: the lineup is SCOPED to the local member's party — only LobbyMember rows whose PartyId equals
+// PART C: the lineup is SCOPED to the local member's party - only LobbyMember rows whose PartyId equals
 // myPartyId are shown (a freshly-authed unpartied '' member still shows itself via the '' bucket).
 //
-// PART A: nothing renders during Connecting/Auth — SetActive(false) hides the rendered roots. The
+// PART A: nothing renders during Connecting/Auth - SetActive(false) hides the rendered roots. The
 // pre-auth 'You' ghost path is DELETED (PART A guarantees the local member row exists by Lobby phase).
 //
 // Models are keyed by Identity and REUSED across rebuilds (re-instantiated only if CharacterId changed)
@@ -75,7 +75,7 @@ public class CharacterCarousel : MonoBehaviour
         canvas = cv;
         lineupCenter = center;
         fireWorld = fire;
-        // Spacing trimmed so 6 podiums fit the lobbyCam frustum (per perf note — was 1.5, ~7.5m wide).
+        // Spacing trimmed so 6 podiums fit the lobbyCam frustum (per perf note - was 1.5, ~7.5m wide).
         spacing = Mathf.Min(lineupSpacing, 1.1f);
         groundY = groundYFn;
     }
@@ -173,11 +173,18 @@ public class CharacterCarousel : MonoBehaviour
             var s = new Slot { foot = SlotPosition(i, PARTY_SLOTS) };
             s.podium = new CharacterPodium();
             s.podium.Build(null, s.foot, groundY, false);
-            s.crown = LobbyUI.WorldLabel(canvas, 18, LobbyUI.Ember, new Vector2(240f, 26f));
-            s.name  = LobbyUI.WorldLabel(canvas, LobbyUI.HeaderSize, LobbyUI.AshText, new Vector2(260f, 30f));
-            s.pill  = LobbyUI.WorldLabel(canvas, 15, LobbyUI.NotReadyGrey, new Vector2(200f, 24f));
+            s.crown = LobbyUI.WorldLabel(canvas, 15, LobbyUI.Ember, new Vector2(240f, 22f));
+            s.name  = LobbyUI.WorldLabel(canvas, 24, LobbyUI.AshText, new Vector2(280f, 32f));
+            s.pill  = LobbyUI.WorldLabel(canvas, 13, LobbyUI.NotReadyGrey, new Vector2(200f, 22f));
             s.plus  = LobbyUI.WorldLabel(canvas, 40, LobbyUI.EmberDim, new Vector2(80f, 80f));
             s.plus.fg.text = "+"; s.plus.shadow.text = "+";
+
+            // AAA typography: route the floating labels through Barlow (Bold name, Medium crown/pill).
+            SkinWorldLabel(s.name, StorySequencer.Weight.Bold);
+            SkinWorldLabel(s.crown, StorySequencer.Weight.Medium);
+            SkinWorldLabel(s.pill, StorySequencer.Weight.Medium);
+            SkinWorldLabel(s.plus, StorySequencer.Weight.Light);
+
             grid[i] = s;
         }
     }
@@ -265,7 +272,7 @@ public class CharacterCarousel : MonoBehaviour
         FaceCamera(s.go.transform);
         SeatModel(s.go, s.foot, s.podium.TopY);
 
-        // Cinematic key + rim rig on the SELECTED (local) model only — the podium key is a soft warm
+        // Cinematic key + rim rig on the SELECTED (local) model only - the podium key is a soft warm
         // base, this adds a brighter warm key from camera-front-left and a cool rim from behind so the
         // hero silhouette pops. Parented to the model so it's destroyed with it on a character swap.
         if (isLocal) EnsureHeroLights(s);
@@ -275,10 +282,12 @@ public class CharacterCarousel : MonoBehaviour
         string nm = !string.IsNullOrEmpty(m.Nickname) ? m.Nickname : m.Username;
         SetLabel(s.name, nm, isLocal ? LobbyUI.EmberSoft : LobbyUI.AshText);
 
-        string crownTxt = m.IsExpeditionLead ? "♦ LEAD" : "";
+        // Lead marker as letter-spaced text (no glyph - renders reliably in Barlow).
+        string crownTxt = m.IsExpeditionLead ? Spaced("LEAD") : "";
         SetLabel(s.crown, crownTxt, LobbyUI.Ember);
 
-        SetLabel(s.pill, m.IsReady ? "READY" : "NOT READY", m.IsReady ? LobbyUI.ReadyGreen : LobbyUI.NotReadyGrey);
+        SetLabel(s.pill, m.IsReady ? Spaced("READY") : Spaced("NOT READY"),
+                 m.IsReady ? LobbyUI.ReadyGreen : LobbyUI.NotReadyGrey);
 
         // Hide the '+' on an occupied slot.
         if (s.plus.group != null) s.plus.group.alpha = 0f;
@@ -302,6 +311,26 @@ public class CharacterCarousel : MonoBehaviour
         if (h.fg == null) return;
         h.fg.text = text; h.shadow.text = text;
         h.fg.color = col;
+    }
+
+    // Route a world-space label (both fg + shadow Text) through a Barlow weight.
+    static void SkinWorldLabel(LobbyUI.WorldLabelHandle h, StorySequencer.Weight w)
+    {
+        if (h.fg != null) StorySequencer.Apply(h.fg, w);
+        if (h.shadow != null) StorySequencer.Apply(h.shadow, w);
+    }
+
+    // Thin-space (U+2009 via U+0020 here for legacy-font safety) letter-spacing for the small pills.
+    static string Spaced(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return s;
+        var sb = new System.Text.StringBuilder(s.Length * 2);
+        for (int i = 0; i < s.Length; i++)
+        {
+            sb.Append(s[i]);
+            if (i < s.Length - 1) sb.Append(' ');
+        }
+        return sb.ToString();
     }
 
     void FaceCamera(Transform t)
@@ -337,7 +366,7 @@ public class CharacterCarousel : MonoBehaviour
         Vector3 chest = new Vector3(s.foot.x, s.podium.TopY + 1.3f, s.foot.z);
 
         var rig = new GameObject("HeroLights");
-        rig.transform.SetParent(s.go.transform, true);   // worldPositionStays — local rotation is irrelevant, lights are aimed in world space
+        rig.transform.SetParent(s.go.transform, true);   // worldPositionStays - local rotation is irrelevant, lights are aimed in world space
         s.heroLights = rig;
 
         // Camera-relative basis (flattened to the ground plane) so the rig reads from the viewer's POV.
@@ -359,7 +388,7 @@ public class CharacterCarousel : MonoBehaviour
     }
 
     // HDRP light: AddComponent<Light>() + AddComponent<HDAdditionalLightData>(), hd.intensity = candela.
-    // (No AddHDLight, no LightUnit — those APIs do not exist and break the assembly.)
+    // (No AddHDLight, no LightUnit - those APIs do not exist and break the assembly.)
     static void AddHeroLight(Transform parent, string name, Vector3 pos, Vector3 aimAt, LightType type,
                              Color color, float range, float spotAngle, float intensity)
     {
@@ -375,7 +404,7 @@ public class CharacterCarousel : MonoBehaviour
         l.range = range;
         if (type == LightType.Spot) l.spotAngle = spotAngle;
         var hd = go.AddComponent<HDAdditionalLightData>();
-        hd.intensity = intensity;   // RAW CANDELA via the legacyLight passthrough — NOT lumens
+        hd.intensity = intensity;   // RAW CANDELA via the legacyLight passthrough - NOT lumens
     }
 
     void ClearHeroLights(Slot s)
@@ -397,7 +426,7 @@ public class CharacterCarousel : MonoBehaviour
             // never renders solid white in a player build. Pack prefabs ship Built-in-shader materials.
             SurvivalistModels.FixHdrp(go);
             // Rig as a non-local model: adds an Animator on the shared Locomotion controller, so the
-            // lineup model plays the idle pose (Speed stays 0 — CharacterLocomotion sees no movement).
+            // lineup model plays the idle pose (Speed stays 0 - CharacterLocomotion sees no movement).
             // localControl:false -> a CapsuleCollider is added, harmless on a podium model.
             CharacterRig.Apply(go, false);
         }
@@ -411,7 +440,7 @@ public class CharacterCarousel : MonoBehaviour
         return go;
     }
 
-    // Seat the model so its FEET (lowest renderer point) rest exactly on the disc top (topY) — no
+    // Seat the model so its FEET (lowest renderer point) rest exactly on the disc top (topY) - no
     // floating, no clipping into the podium. The model's root pivot is often at the hips (mocap rigs)
     // or otherwise offset, so we measure the real bounds rather than guess: place the root at topY,
     // read the combined world-space renderer bounds, then lift/drop by the gap to its lowest point.

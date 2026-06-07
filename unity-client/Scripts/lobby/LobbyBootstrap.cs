@@ -40,10 +40,15 @@ public class LobbyBootstrap : MonoBehaviour
     [Header("Scene")]
     public string forestSceneName = "Forest_EnvironmentSample";
 
+    // The scene to reload on RETURN TO LOBBY. Captured from forestSceneName so DeathScreen (and any other
+    // caller) has an authoritative scene name without a serialized field of its own. Falls back to the
+    // active scene name if the lobby never ran (defensive).
+    static string _returnSceneName = "Forest_EnvironmentSample";
+
     [Header("Staging")]
     [Tooltip("Stage the lobby inside the already-loaded forest (state-swap on launch, no reload).")]
     public bool stageInForest = true;
-    [Tooltip("Mirror of NetworkedWorld.worldOffset — the spawn clearing the lobby anchors to.")]
+    [Tooltip("Mirror of NetworkedWorld.worldOffset, the spawn clearing the lobby anchors to.")]
     public Vector3 worldOffset = new Vector3(-233.556f, 105.15f, -233.178f);
 
     [Header("Lobby rig placement (relative to worldOffset)")]
@@ -136,6 +141,8 @@ public class LobbyBootstrap : MonoBehaviour
         }
         GameManager.AutoRegisterPlayer = false;
         NetworkedWorld.GameplayActive = false;   // gate gameplay until Launch
+
+        if (!string.IsNullOrEmpty(forestSceneName)) _returnSceneName = forestSceneName;
 
         connectStart = Time.time;
 #if UNITY_EDITOR
@@ -384,15 +391,39 @@ public class LobbyBootstrap : MonoBehaviour
         g.blocksRaycasts = interactive;
     }
 
+    // ---- RETURN TO LOBBY (Fortnite death -> lobby) ----
+    // Authoritative "back to the lobby" entry point. Called by DeathScreen after the death beat. We do NOT try to
+    // rebuild the lobby in-place (Launch's Teardown is destructive and one-way: it destroys the rig/canvas/cam
+    // with no rebuild path). Instead we RELOAD the forest scene. GameManager is DontDestroyOnLoad and the saved
+    // auth token auto-logs-in on reconnect, so the reloaded LobbyBootstrap.Awake rebuilds the lobby fresh and
+    // lands the same identity at Connecting -> Auth -> Lobby, ready to re-queue and DEPLOY for a new life.
+    //
+    // GameplayActive is flipped false FIRST so no body re-spawns during the reload (mirrors the lobby gate). The
+    // dead body + its camera are destroyed by the scene unload. Null/state-safe; never throws.
+    public static void ReturnToLobby()
+    {
+        // No body spawns while we tear the scene down and rebuild the lobby.
+        NetworkedWorld.GameplayActive = false;
+
+        string scene = !string.IsNullOrEmpty(_returnSceneName) ? _returnSceneName : SceneManager.GetActiveScene().name;
+
+        if (!Application.CanStreamedLevelBeLoaded(scene))
+        {
+            Debug.LogError($"[LOBBY] RETURN TO LOBBY: scene '{scene}' is not in Build Settings (File > Build Settings > Scenes In Build). Cannot reload.");
+            return;
+        }
+
+        Debug.Log($"[LOBBY] RETURN TO LOBBY: reloading '{scene}' (token auto-login -> lobby).");
+        SceneManager.LoadScene(scene);
+    }
+
     // ---- LAUNCH ----
     void Launch()
     {
         if (phase == Phase.Launching) return;
         phase = Phase.Launching;
 
-        // Flip the gate FIRST so the armed Player.OnInsert + SpawnExisting() actually spawn.
-        NetworkedWorld.GameplayActive = true;
-
+        // Compute the chosen username + class from the lobby row BEFORE we tear the lobby down.
         string username = "Rescuer";
         string characterClass = "Ranger";
         var me = GameManager.Conn.Db.LobbyMember.Identity.Find(GameManager.LocalIdentity);
@@ -403,7 +434,22 @@ public class LobbyBootstrap : MonoBehaviour
         }
 
         ApplyPhaseVisibility(Phase.Launching);
-        Teardown();   // destroys lobby rig BEFORE spawning so no second MainCamera fights ExpeditionCamera
+        Teardown();   // destroys the lobby rig; the DeployCutscene overlay is DontDestroyOnLoad and survives
+
+        // DEPLOY cold-open: play the full-screen cutscene + "THE LOST EXPEDITION" title FIRST, THEN spawn. We do
+        // NOT flip GameplayActive or JoinForest until the cutscene ENDS, so the player + bots are not spawned
+        // during the cutscene (the player can no longer be killed mid-cutscene, and the mission + its cabin
+        // waypoint only start after the player spawns). The spawn is deferred into the completion callback;
+        // DeployCutscene fires the callback even if the video is missing/fails, so launch never stalls.
+        DeployCutscene.Play(() => SpawnIntoForest(username, characterClass));
+    }
+
+    // Spawn the player + world AFTER the deploy cutscene + title finish (invoked by DeployCutscene's callback).
+    // Flipping GameplayActive HERE (not before the cutscene) is what keeps bots/player/mission out until the
+    // cutscene is over, so the player starts clean and fresh.
+    void SpawnIntoForest(string username, string characterClass)
+    {
+        NetworkedWorld.GameplayActive = true;   // flip the gate so the armed Player.OnInsert + SpawnExisting fire
 
         if (stageInForest)
         {
@@ -611,7 +657,11 @@ public class LobbyBootstrap : MonoBehaviour
         var scaler = canvasGo.AddComponent<CanvasScaler>();
         scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
         scaler.referenceResolution = new Vector2(1920f, 1080f);
-        scaler.matchWidthOrHeight = 0.5f;
+        // Match HEIGHT (1f), not the 0.5 blend: anchors the layout to a fixed 1080-tall reference so every
+        // top/bottom-anchored band (wordmark/operator, party/chat, deploy/quote) sits at a predictable
+        // position on any display aspect. Only the horizontal axis letterboxes. This is what keeps the two
+        // demo machines (which may be 16:9 or 16:10 laptops) from showing overlapping/spilling UI.
+        scaler.matchWidthOrHeight = 1f;
         canvasGo.AddComponent<GraphicRaycaster>();
 
         if (EventSystem.current == null)
@@ -669,7 +719,7 @@ public class LobbyBootstrap : MonoBehaviour
         {
             var prefab = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>(path);
             if (prefab != null) { list.Add(new CharacterLibrary.ModelEntry { modelKey = key, prefab = prefab }); found++; }
-            else Debug.LogWarning($"[LOBBY] survivalist prefab NOT FOUND at '{path}' — that skin falls back to a capsule.");
+            else Debug.LogWarning($"[LOBBY] survivalist prefab NOT FOUND at '{path}', that skin falls back to a capsule.");
         }
 
         if (library == null) library = new CharacterLibrary();
